@@ -59,6 +59,29 @@ defmodule Nostr.Client do
       {relay_url, incoming.id}
   end
   ```
+
+  ## NIP-77 negentropy quickstart
+
+  ```elixir
+  relay_url = "wss://relay.example"
+
+  opts = [
+    pubkey: MySigner.pubkey(),
+    signer: MySigner
+  ]
+
+  {:ok, first_turn} =
+    Nostr.Client.neg_open(
+      relay_url,
+      "neg-sync-1",
+      %Nostr.Filter{kinds: [1]},
+      initial_message,
+      opts
+    )
+
+  {:ok, next_turn} = Nostr.Client.neg_msg(relay_url, "neg-sync-1", local_message, opts)
+  :ok = Nostr.Client.neg_close(relay_url, "neg-sync-1", opts)
+  ```
   """
 
   alias Nostr.Client.MultiSessionSupervisor
@@ -174,6 +197,84 @@ defmodule Nostr.Client do
       when is_binary(relay_url) and is_list(opts) and is_integer(timeout) do
     with {:ok, session_pid} <- get_or_start_session(relay_url, opts) do
       RelaySession.count(session_pid, filters, timeout)
+    end
+  end
+
+  @doc """
+  Starts or replaces a NIP-77 negentropy lifecycle for `sub_id`.
+
+  Waits for the first relay `NEG-MSG` turn.
+
+  ## Example
+
+  ```elixir
+  {:ok, first_turn} =
+    Nostr.Client.neg_open(
+      "wss://relay.example",
+      "neg-sync-1",
+      %Nostr.Filter{kinds: [1]},
+      initial_message,
+      pubkey: pubkey,
+      signer: signer
+    )
+  ```
+  """
+  @spec neg_open(binary(), binary(), Nostr.Filter.t(), binary(), session_opts(), timeout()) ::
+          {:ok, binary()} | {:error, term()}
+  def neg_open(
+        relay_url,
+        sub_id,
+        %Nostr.Filter{} = filter,
+        initial_message,
+        opts,
+        timeout \\ 5_000
+      )
+      when is_binary(relay_url) and is_binary(sub_id) and is_binary(initial_message) and
+             is_list(opts) and is_integer(timeout) do
+    with {:ok, session_pid} <- get_or_start_session(relay_url, opts) do
+      RelaySession.neg_open(session_pid, sub_id, filter, initial_message, timeout)
+    end
+  end
+
+  @doc """
+  Sends the next NIP-77 negentropy message for an open lifecycle.
+
+  Waits for relay `NEG-MSG` response.
+
+  ## Example
+
+  ```elixir
+  {:ok, next_turn} =
+    Nostr.Client.neg_msg("wss://relay.example", "neg-sync-1", local_message,
+      pubkey: pubkey,
+      signer: signer
+    )
+  ```
+  """
+  @spec neg_msg(binary(), binary(), binary(), session_opts(), timeout()) ::
+          {:ok, binary()} | {:error, term()}
+  def neg_msg(relay_url, sub_id, message, opts, timeout \\ 5_000)
+      when is_binary(relay_url) and is_binary(sub_id) and is_binary(message) and is_list(opts) and
+             is_integer(timeout) do
+    with {:ok, session_pid} <- get_or_start_session(relay_url, opts) do
+      RelaySession.neg_msg(session_pid, sub_id, message, timeout)
+    end
+  end
+
+  @doc """
+  Closes an open NIP-77 negentropy lifecycle.
+
+  ## Example
+
+  ```elixir
+  :ok = Nostr.Client.neg_close("wss://relay.example", "neg-sync-1", pubkey: pubkey, signer: signer)
+  ```
+  """
+  @spec neg_close(binary(), binary(), session_opts(), timeout()) :: :ok | {:error, term()}
+  def neg_close(relay_url, sub_id, opts, timeout \\ 5_000)
+      when is_binary(relay_url) and is_binary(sub_id) and is_list(opts) and is_integer(timeout) do
+    with {:ok, session_pid} <- get_or_start_session(relay_url, opts) do
+      RelaySession.neg_close(session_pid, sub_id, timeout)
     end
   end
 

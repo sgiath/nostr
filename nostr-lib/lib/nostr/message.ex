@@ -11,6 +11,10 @@ defmodule Nostr.Message do
           | {:event, binary(), Nostr.Event.t()}
           | {:req, binary(), [Nostr.Filter.t()]}
           | {:close, binary()}
+          | {:neg_open, binary(), Nostr.Filter.t(), binary()}
+          | {:neg_msg, binary(), binary()}
+          | {:neg_close, binary()}
+          | {:neg_err, binary(), binary()}
           | {:eose, binary()}
           | {:notice, String.t()}
           | {:ok, binary(), boolean(), String.t()}
@@ -47,6 +51,36 @@ defmodule Nostr.Message do
   @doc sender: :client
   @spec close(binary()) :: {:close, binary()}
   def close(sub_id), do: {:close, sub_id}
+
+  @doc """
+  Generate negentropy open message (NIP-77)
+  """
+  @doc sender: :client
+  @spec neg_open(binary(), Nostr.Filter.t(), binary()) ::
+          {:neg_open, binary(), Nostr.Filter.t(), binary()}
+  def neg_open(sub_id, %Nostr.Filter{} = filter, initial_message),
+    do: {:neg_open, sub_id, filter, initial_message}
+
+  @doc """
+  Generate negentropy message frame (NIP-77)
+  """
+  @doc sender: [:client, :relay]
+  @spec neg_msg(binary(), binary()) :: {:neg_msg, binary(), binary()}
+  def neg_msg(sub_id, message), do: {:neg_msg, sub_id, message}
+
+  @doc """
+  Generate negentropy close message (NIP-77)
+  """
+  @doc sender: :client
+  @spec neg_close(binary()) :: {:neg_close, binary()}
+  def neg_close(sub_id), do: {:neg_close, sub_id}
+
+  @doc """
+  Generate negentropy error message (NIP-77)
+  """
+  @doc sender: :relay
+  @spec neg_err(binary(), binary()) :: {:neg_err, binary(), binary()}
+  def neg_err(sub_id, reason), do: {:neg_err, sub_id, reason}
 
   @doc """
   Generate count message (NIP-45).
@@ -122,6 +156,7 @@ defmodule Nostr.Message do
         name
         |> Atom.to_string()
         |> String.upcase()
+        |> String.replace("_", "-")
 
       [name_str | rest]
     end)
@@ -169,6 +204,28 @@ defmodule Nostr.Message do
     {:close, sub_id}
   end
 
+  defp do_parse(["NEG-OPEN", sub_id, filter, initial_message], _type)
+       when is_binary(sub_id) and is_map(filter) and is_binary(initial_message) do
+    if valid_hex_string?(initial_message) do
+      {:neg_open, sub_id, Nostr.Filter.parse(filter), initial_message}
+    else
+      :error
+    end
+  end
+
+  defp do_parse(["NEG-MSG", sub_id, message], _type)
+       when is_binary(sub_id) and is_binary(message) do
+    if valid_hex_string?(message) do
+      {:neg_msg, sub_id, message}
+    else
+      :error
+    end
+  end
+
+  defp do_parse(["NEG-CLOSE", sub_id], _type) when is_binary(sub_id) do
+    {:neg_close, sub_id}
+  end
+
   defp do_parse(["AUTH", event], :general) when is_map(event) do
     {:auth, Nostr.Event.parse(event)}
   end
@@ -205,6 +262,11 @@ defmodule Nostr.Message do
 
   defp do_parse(["CLOSED", sub_id, message], _type) when is_binary(sub_id) do
     {:closed, sub_id, message}
+  end
+
+  defp do_parse(["NEG-ERR", sub_id, reason], _type)
+       when is_binary(sub_id) and is_binary(reason) do
+    {:neg_err, sub_id, reason}
   end
 
   defp do_parse(["COUNT", sub_id, payload], _type)
@@ -279,6 +341,15 @@ defmodule Nostr.Message do
   end
 
   defp valid_hll_hex?(_value), do: false
+
+  defp valid_hex_string?(value) when is_binary(value) and rem(byte_size(value), 2) == 0 do
+    case Base.decode16(value, case: :mixed) do
+      {:ok, _decoded} -> true
+      :error -> false
+    end
+  end
+
+  defp valid_hex_string?(_value), do: false
 
   defp maybe_put_optional(acc, key, payload, payload_key) do
     case Map.fetch(payload, payload_key) do

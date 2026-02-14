@@ -45,6 +45,34 @@ defmodule Nostr.MessageTest do
     end
   end
 
+  describe "neg_open/3" do
+    test "creates neg-open tuple" do
+      filter = %Nostr.Filter{kinds: [1], limit: 50}
+
+      {:neg_open, sub_id, parsed_filter, initial_message} =
+        Nostr.Message.neg_open("neg-sub", filter, "61ab")
+
+      assert sub_id == "neg-sub"
+      assert parsed_filter == filter
+      assert initial_message == "61ab"
+    end
+  end
+
+  describe "neg_msg/2" do
+    test "creates neg-msg tuple" do
+      {:neg_msg, sub_id, message} = Nostr.Message.neg_msg("neg-sub", "00ff")
+      assert sub_id == "neg-sub"
+      assert message == "00ff"
+    end
+  end
+
+  describe "neg_close/1" do
+    test "creates neg-close tuple" do
+      {:neg_close, sub_id} = Nostr.Message.neg_close("neg-sub")
+      assert sub_id == "neg-sub"
+    end
+  end
+
   describe "count/2" do
     test "creates count response with integer" do
       {:count, sub_id, %{count: count}} = Nostr.Message.count(42, "sub123")
@@ -151,6 +179,31 @@ defmodule Nostr.MessageTest do
       assert decoded == ["CLOSE", "sub123"]
     end
 
+    test "serializes neg-open message" do
+      filter = %Nostr.Filter{kinds: [1], limit: 10}
+      msg = Nostr.Message.neg_open("neg-sub", filter, "61ab")
+      json = Nostr.Message.serialize(msg)
+
+      decoded = JSON.decode!(json)
+      assert decoded == ["NEG-OPEN", "neg-sub", %{"kinds" => [1], "limit" => 10}, "61ab"]
+    end
+
+    test "serializes neg-msg message" do
+      msg = Nostr.Message.neg_msg("neg-sub", "00ff")
+      json = Nostr.Message.serialize(msg)
+
+      decoded = JSON.decode!(json)
+      assert decoded == ["NEG-MSG", "neg-sub", "00ff"]
+    end
+
+    test "serializes neg-close message" do
+      msg = Nostr.Message.neg_close("neg-sub")
+      json = Nostr.Message.serialize(msg)
+
+      decoded = JSON.decode!(json)
+      assert decoded == ["NEG-CLOSE", "neg-sub"]
+    end
+
     test "serializes notice message" do
       msg = Nostr.Message.notice("hello")
       json = Nostr.Message.serialize(msg)
@@ -221,6 +274,31 @@ defmodule Nostr.MessageTest do
       assert sub_id == "sub123"
     end
 
+    test "parses NEG-OPEN message" do
+      json = ~s(["NEG-OPEN","neg-sub",{"kinds":[1],"limit":10},"61ab"])
+
+      {:neg_open, sub_id, filter, initial_message} = Nostr.Message.parse(json)
+      assert sub_id == "neg-sub"
+      assert filter.kinds == [1]
+      assert filter.limit == 10
+      assert initial_message == "61ab"
+    end
+
+    test "parses NEG-MSG message" do
+      json = ~s(["NEG-MSG","neg-sub","00ff"])
+
+      {:neg_msg, sub_id, message} = Nostr.Message.parse(json)
+      assert sub_id == "neg-sub"
+      assert message == "00ff"
+    end
+
+    test "parses NEG-CLOSE message" do
+      json = ~s(["NEG-CLOSE","neg-sub"])
+
+      {:neg_close, sub_id} = Nostr.Message.parse(json)
+      assert sub_id == "neg-sub"
+    end
+
     test "parses NOTICE message" do
       json = ~s(["NOTICE","Error message"])
 
@@ -281,6 +359,14 @@ defmodule Nostr.MessageTest do
       {:closed, sub_id, message} = Nostr.Message.parse(json)
       assert sub_id == "sub123"
       assert message == "subscription closed"
+    end
+
+    test "parses NEG-ERR message" do
+      json = ~s(["NEG-ERR","neg-sub","blocked: query too big"])
+
+      {:neg_err, sub_id, reason} = Nostr.Message.parse(json)
+      assert sub_id == "neg-sub"
+      assert reason == "blocked: query too big"
     end
 
     @tag :capture_log
@@ -367,6 +453,18 @@ defmodule Nostr.MessageTest do
       json = ~s(["COUNT","sub123",{"count":42,"hll":"#{invalid_hll}"}])
       assert Nostr.Message.parse(json) == :error
     end
+
+    @tag :capture_log
+    test "returns error for NEG-MSG with non-hex payload" do
+      json = ~s(["NEG-MSG","neg-sub","zz11"])
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
+    test "returns error for NEG-OPEN with non-hex payload" do
+      json = ~s(["NEG-OPEN","neg-sub",{"kinds":[1]},"not-hex"])
+      assert Nostr.Message.parse(json) == :error
+    end
   end
 
   describe "closed/2" do
@@ -382,6 +480,22 @@ defmodule Nostr.MessageTest do
 
       decoded = JSON.decode!(json)
       assert decoded == ["CLOSED", "sub123", "error: subscription not found"]
+    end
+  end
+
+  describe "neg_err/2" do
+    test "creates neg-err tuple" do
+      {:neg_err, sub_id, reason} = Nostr.Message.neg_err("neg-sub", "closed: timeout")
+      assert sub_id == "neg-sub"
+      assert reason == "closed: timeout"
+    end
+
+    test "serializes neg-err message" do
+      msg = Nostr.Message.neg_err("neg-sub", "blocked: query too big")
+      json = Nostr.Message.serialize(msg)
+
+      decoded = JSON.decode!(json)
+      assert decoded == ["NEG-ERR", "neg-sub", "blocked: query too big"]
     end
   end
 

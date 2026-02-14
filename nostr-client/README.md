@@ -4,21 +4,12 @@ Elixir OTP client for the Nostr relay protocol (NIP-01) over WebSocket.
 
 ## Client-Relay NIPs
 
-From `../nips/`, these are the NIPs that directly affect client-relay communication for this project.
-
-### Implemented
-
 - **NIP-01: Basic protocol flow description** - `nostr-client` implements the core WebSocket message flow (`EVENT`, `REQ`, `CLOSE`, `OK`, `EOSE`, `CLOSED`, `NOTICE`) used for publishing and subscriptions.
-- **NIP-45: Event Counts** - `nostr-client` supports `COUNT` requests on single relays and multi-relay sessions, including relay payload passthrough for `count`, optional `approximate`, and optional `hll` fields.
+- **NIP-11: Relay Information Document** - `Nostr.Client.get_relay_info/2` (`Nostr.Client.RelayInfo.fetch/2`) reads relay metadata from `/.well-known/nostr.json` (`application/nostr+json`) and parses limits plus `supported_nips`.
 - **NIP-42: Authentication of clients to relays** - the client handles relay `AUTH` challenges, sends signed client-auth events, and retries blocked writes after successful authentication.
+- **NIP-45: Event Counts** - `nostr-client` supports `COUNT` requests on single relays and multi-relay sessions, including relay payload passthrough for `count`, optional `approximate`, and optional `hll` fields.
 - **NIP-50: Search Capability** - search-enabled `REQ` filters are supported because `Nostr.Filter` includes `search` and filters are passed through unchanged to relay requests.
-
-### Not implemented
-
-- **NIP-11: Relay Information Document** - the client does not fetch relay HTTP metadata (`application/nostr+json`) to discover relay limits or `supported_nips`.
-- **NIP-77: Negentropy Syncing** - the `NEG-OPEN`/`NEG-MSG`/`NEG-CLOSE` reconciliation protocol is not implemented.
-
-Note: NIP-12 and NIP-20 are marked as moved into NIP-01 in `../nips/`, so they are treated as covered by the NIP-01 implementation above.
+- **NIP-77: Negentropy Syncing** - `Nostr.Client.neg_open/5`, `neg_msg/4`, and `neg_close/3` support the `NEG-OPEN`/`NEG-MSG`/`NEG-CLOSE` lifecycle with deterministic relay/session error tuples.
 
 ## API Message Contracts
 
@@ -102,6 +93,35 @@ Notes:
 - The library intentionally returns per-relay raw results and does not aggregate totals across relays.
 - `hll` and `approximate` are transported/preserved when provided by relays.
 - Client-side HLL merge/estimate utilities are not implemented yet.
+
+## Negentropy APIs (NIP-77)
+
+Single relay lifecycle:
+
+```elixir
+relay_url = "wss://relay.example"
+opts = [pubkey: pubkey, signer: signer]
+
+{:ok, first_turn} =
+  Nostr.Client.neg_open(
+    relay_url,
+    "neg-sync-1",
+    %Nostr.Filter{kinds: [1]},
+    initial_message,
+    opts
+  )
+
+{:ok, next_turn} = Nostr.Client.neg_msg(relay_url, "neg-sync-1", local_message, opts)
+:ok = Nostr.Client.neg_close(relay_url, "neg-sync-1", opts)
+```
+
+Notes:
+
+- `neg_open/5` and `neg_msg/4` wait for the next relay turn and return `{:ok, relay_message}`.
+- One active lifecycle is tracked per `sub_id`; opening the same `sub_id` replaces the prior lifecycle.
+- Only one outbound turn can be pending at a time for a `sub_id`; concurrent `neg_msg` calls return `{:error, :neg_msg_already_pending}`.
+- Relay `NEG-ERR` is surfaced as `{:error, {:neg_err, class, reason}}` where `class` is `:blocked`, `:closed`, or `:relay`.
+- Common lifecycle errors include `{:error, :not_connected}`, `{:error, :neg_not_open}`, and `{:error, {:session_stopped, reason}}`.
 
 ## Installation
 

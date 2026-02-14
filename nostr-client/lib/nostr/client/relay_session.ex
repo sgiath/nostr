@@ -50,6 +50,8 @@ defmodule Nostr.Client.RelaySession do
             subscriptions: %{},
             pending_publishes: %{},
             pending_counts: %{},
+            neg_sessions: %{},
+            pending_negs: %{},
             notify_pid: nil,
             transport: Mint,
             transport_opts: []
@@ -179,6 +181,37 @@ defmodule Nostr.Client.RelaySession do
   @spec close(pid(), timeout()) :: :ok
   def close(pid, timeout \\ 5_000), do: GenServer.call(pid, :close, timeout)
 
+  @doc """
+  Starts or replaces a NIP-77 negentropy lifecycle for `sub_id`.
+
+  Waits for the first relay `NEG-MSG` turn.
+  """
+  @spec neg_open(pid(), binary(), Nostr.Filter.t(), binary(), timeout()) ::
+          {:ok, binary()} | {:error, term()}
+  def neg_open(pid, sub_id, %Nostr.Filter{} = filter, initial_message, timeout \\ 5_000)
+      when is_binary(sub_id) and is_binary(initial_message) do
+    GenServer.call(pid, {:neg_open, sub_id, filter, initial_message}, timeout)
+  end
+
+  @doc """
+  Sends the next NIP-77 negentropy message for an open lifecycle.
+
+  Waits for relay `NEG-MSG` response.
+  """
+  @spec neg_msg(pid(), binary(), binary(), timeout()) :: {:ok, binary()} | {:error, term()}
+  def neg_msg(pid, sub_id, message, timeout \\ 5_000)
+      when is_binary(sub_id) and is_binary(message) do
+    GenServer.call(pid, {:neg_msg, sub_id, message}, timeout)
+  end
+
+  @doc """
+  Closes an open NIP-77 negentropy lifecycle.
+  """
+  @spec neg_close(pid(), binary(), timeout()) :: :ok | {:error, term()}
+  def neg_close(pid, sub_id, timeout \\ 5_000) when is_binary(sub_id) do
+    GenServer.call(pid, {:neg_close, sub_id}, timeout)
+  end
+
   @impl true
   def init(opts) do
     with {:ok, relay_url} <- fetch_binary_opt(opts, :relay_url),
@@ -233,6 +266,21 @@ defmodule Nostr.Client.RelaySession do
     {:reply, {:error, :not_connected}, state}
   end
 
+  def handle_call({:neg_open, _sub_id, _filter, _initial_message}, _from, %{phase: phase} = state)
+      when phase != :connected do
+    {:reply, {:error, :not_connected}, state}
+  end
+
+  def handle_call({:neg_msg, _sub_id, _message}, _from, %{phase: phase} = state)
+      when phase != :connected do
+    {:reply, {:error, :not_connected}, state}
+  end
+
+  def handle_call({:neg_close, _sub_id}, _from, %{phase: phase} = state)
+      when phase != :connected do
+    {:reply, {:error, :not_connected}, state}
+  end
+
   def handle_call({:publish, %Nostr.Event{} = event}, from, state) do
     with {:ok, event_id} <- fetch_event_id(event),
          false <- Map.has_key?(state.pending_publishes, event_id),
@@ -258,6 +306,47 @@ defmodule Nostr.Client.RelaySession do
            send_nostr_message(state, Nostr.Message.count(normalized_filters, query_id)) do
       pending_counts = Map.put(next_state.pending_counts, query_id, from)
       {:noreply, %{next_state | pending_counts: pending_counts}}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:neg_open, sub_id, filter, initial_message}, from, state) do
+    with {:ok, state} <- maybe_cancel_pending_neg(state, sub_id, {:neg_closed, :replaced}),
+         {:ok, next_state} <-
+           send_nostr_message(state, Nostr.Message.neg_open(sub_id, filter, initial_message)) do
+      neg_sessions =
+        Map.put(next_state.neg_sessions, sub_id, %{state: :open, waiting_for_relay?: true})
+
+      pending_negs = Map.put(next_state.pending_negs, sub_id, %{from: from, op: :neg_open})
+
+      {:noreply, %{next_state | neg_sessions: neg_sessions, pending_negs: pending_negs}}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:neg_msg, sub_id, message}, from, state) do
+    with {:ok, session} <- fetch_neg_session(state, sub_id),
+         false <- session.waiting_for_relay?,
+         {:ok, next_state} <- send_nostr_message(state, Nostr.Message.neg_msg(sub_id, message)) do
+      neg_sessions =
+        Map.put(next_state.neg_sessions, sub_id, %{session | waiting_for_relay?: true})
+
+      pending_negs = Map.put(next_state.pending_negs, sub_id, %{from: from, op: :neg_msg})
+
+      {:noreply, %{next_state | neg_sessions: neg_sessions, pending_negs: pending_negs}}
+    else
+      true -> {:reply, {:error, :neg_msg_already_pending}, state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:neg_close, sub_id}, _from, state) do
+    with {:ok, _session} <- fetch_neg_session(state, sub_id),
+         {:ok, state} <- maybe_cancel_pending_neg(state, sub_id, {:neg_closed, :client}),
+         {:ok, next_state} <- send_nostr_message(state, Nostr.Message.neg_close(sub_id)) do
+      {:reply, :ok, %{next_state | neg_sessions: Map.delete(next_state.neg_sessions, sub_id)}}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
@@ -344,6 +433,7 @@ defmodule Nostr.Client.RelaySession do
     _ = close_transport(state)
     fail_pending_publishes(state, {:session_stopped, normalize_reason(reason)})
     fail_pending_counts(state, {:session_stopped, normalize_reason(reason)})
+    fail_pending_negs(state, {:session_stopped, normalize_reason(reason)})
     notify_subscriptions(state, {:nostr, :error, {:session_stopped, normalize_reason(reason)}})
     notify(state, {:nostr_client, :disconnected, self(), normalize_reason(reason)})
     :ok
@@ -440,32 +530,49 @@ defmodule Nostr.Client.RelaySession do
 
   defp handle_text_payload(state, payload) do
     case parse_message(payload) do
-      {:event, sub_id, %Nostr.Event{} = event} ->
-        dispatch_subscription(state, sub_id, {:nostr, :event, sub_id, event})
-
-      {:eose, sub_id} ->
-        dispatch_subscription(state, sub_id, {:nostr, :eose, sub_id})
-
-      {:count, query_id, payload} ->
-        handle_count_response(state, query_id, payload)
-
-      {:closed, sub_id, message} ->
-        handle_closed_response(state, sub_id, message)
-
-      {:ok, event_id, accepted?, message} ->
-        handle_ok(state, event_id, accepted?, message)
-
-      {:auth, challenge} when is_binary(challenge) ->
-        handle_auth_challenge(state, challenge)
-
-      {:notice, message} ->
-        notify(state, {:nostr_client, :notice, self(), message})
-        {:noreply, state}
-
-      _other ->
-        {:noreply, state}
+      parsed_message ->
+        handle_parsed_message(state, parsed_message)
     end
   end
+
+  defp handle_parsed_message(state, {:event, sub_id, %Nostr.Event{} = event}) do
+    dispatch_subscription(state, sub_id, {:nostr, :event, sub_id, event})
+  end
+
+  defp handle_parsed_message(state, {:eose, sub_id}) do
+    dispatch_subscription(state, sub_id, {:nostr, :eose, sub_id})
+  end
+
+  defp handle_parsed_message(state, {:count, query_id, payload}) do
+    handle_count_response(state, query_id, payload)
+  end
+
+  defp handle_parsed_message(state, {:closed, sub_id, message}) do
+    handle_closed_response(state, sub_id, message)
+  end
+
+  defp handle_parsed_message(state, {:ok, event_id, accepted?, message}) do
+    handle_ok(state, event_id, accepted?, message)
+  end
+
+  defp handle_parsed_message(state, {:auth, challenge}) when is_binary(challenge) do
+    handle_auth_challenge(state, challenge)
+  end
+
+  defp handle_parsed_message(state, {:neg_msg, sub_id, message}) do
+    handle_neg_msg_response(state, sub_id, message)
+  end
+
+  defp handle_parsed_message(state, {:neg_err, sub_id, reason}) do
+    handle_neg_err_response(state, sub_id, reason)
+  end
+
+  defp handle_parsed_message(state, {:notice, message}) do
+    notify(state, {:nostr_client, :notice, self(), message})
+    {:noreply, state}
+  end
+
+  defp handle_parsed_message(state, _parsed_message), do: {:noreply, state}
 
   defp parse_message(payload) do
     try do
@@ -630,6 +737,80 @@ defmodule Nostr.Client.RelaySession do
     Enum.each(state.pending_counts, fn {_query_id, from} ->
       GenServer.reply(from, {:error, reason})
     end)
+  end
+
+  defp fail_pending_negs(state, reason) do
+    Enum.each(state.pending_negs, fn {_sub_id, %{from: from}} ->
+      GenServer.reply(from, {:error, reason})
+    end)
+  end
+
+  defp handle_neg_msg_response(state, sub_id, message)
+       when is_binary(sub_id) and is_binary(message) do
+    case Map.fetch(state.neg_sessions, sub_id) do
+      :error ->
+        {:noreply, state}
+
+      {:ok, session} ->
+        case Map.pop(state.pending_negs, sub_id) do
+          {nil, pending_negs} ->
+            neg_sessions = Map.delete(state.neg_sessions, sub_id)
+            {:noreply, %{state | neg_sessions: neg_sessions, pending_negs: pending_negs}}
+
+          {%{from: from}, pending_negs} ->
+            GenServer.reply(from, {:ok, message})
+
+            neg_sessions =
+              Map.put(state.neg_sessions, sub_id, %{session | waiting_for_relay?: false})
+
+            {:noreply, %{state | neg_sessions: neg_sessions, pending_negs: pending_negs}}
+        end
+    end
+  end
+
+  defp handle_neg_msg_response(state, _sub_id, _message), do: {:noreply, state}
+
+  defp handle_neg_err_response(state, sub_id, reason)
+       when is_binary(sub_id) and is_binary(reason) do
+    state = %{state | neg_sessions: Map.delete(state.neg_sessions, sub_id)}
+    error_reason = classify_neg_err(reason)
+
+    case Map.pop(state.pending_negs, sub_id) do
+      {nil, pending_negs} ->
+        {:noreply, %{state | pending_negs: pending_negs}}
+
+      {%{from: from}, pending_negs} ->
+        GenServer.reply(from, {:error, error_reason})
+        {:noreply, %{state | pending_negs: pending_negs}}
+    end
+  end
+
+  defp handle_neg_err_response(state, _sub_id, _reason), do: {:noreply, state}
+
+  defp classify_neg_err(reason) do
+    cond do
+      String.starts_with?(reason, "blocked:") -> {:neg_err, :blocked, reason}
+      String.starts_with?(reason, "closed:") -> {:neg_err, :closed, reason}
+      true -> {:neg_err, :relay, reason}
+    end
+  end
+
+  defp fetch_neg_session(state, sub_id) do
+    case Map.fetch(state.neg_sessions, sub_id) do
+      {:ok, session} -> {:ok, session}
+      :error -> {:error, :neg_not_open}
+    end
+  end
+
+  defp maybe_cancel_pending_neg(state, sub_id, reason) do
+    case Map.pop(state.pending_negs, sub_id) do
+      {nil, pending_negs} ->
+        {:ok, %{state | pending_negs: pending_negs}}
+
+      {%{from: from}, pending_negs} ->
+        GenServer.reply(from, {:error, reason})
+        {:ok, %{state | pending_negs: pending_negs}}
+    end
   end
 
   defp handle_count_response(state, query_id, payload) do
