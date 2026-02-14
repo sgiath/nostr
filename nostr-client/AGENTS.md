@@ -35,11 +35,14 @@ mix test test/path/to_test.exs       # single file
 mix test test/path/to_test.exs:42    # single test at line
 
 # Full pre-commit check (compile + format + unused deps + credo + prettier + tests)
-mix check
+mix check --fix
 ```
 
 `mix check` pipeline defined in `.check.exs`:
 compiler -> formatter -> unused_deps -> credo -> prettier markdown -> ex_unit.
+
+As with all libraries/apps in this repo, a task is not done until
+`mix check --fix` passes successfully.
 
 ## Nostr Client-Relay Protocol (NIP-01)
 
@@ -84,6 +87,18 @@ Full source in `deps/mint_web_socket/`. Functional (process-less) API:
 
 State is immutable -- `conn` and `websocket` must be threaded through all calls.
 You must handle ping/pong yourself. All Nostr messages are `:text` frames with JSON.
+
+### Runtime gotcha
+
+- For relay sessions, prefer `Mint.HTTP.connect(..., protocols: [:http1])` unless HTTP/2 WS is known supported.
+  Some relays negotiate HTTP/2 but reject RFC8441 WS upgrade with
+  `%Mint.WebSocketError{reason: :extended_connect_disabled}`.
+
+## Session/Auth Architecture Notes
+
+- Session identity is `{normalized_relay_url, pubkey}` (no guest mode in library).
+- Keep only `pubkey` + signer module reference in session state; never store seckey/signing material.
+- Auth flow is lazy: react to `AUTH` challenge or restricted/auth-required replies, then retry blocked op once.
 
 ## Code Style
 
@@ -157,6 +172,10 @@ end
 - `describe "function_name/arity"` blocks grouping related tests.
 - Tag integration/network tests: `@tag :integration`, `@tag :relay`.
   Exclude with `mix test --exclude integration`.
+- External e2e tests use `@tag :external`, excluded by default in `test/test_helper.exs`, and should
+  read relay target from `config :nostr_client, :e2e_relay_url`.
+- Shared test helper modules should live in `test/support/*.ex` and be loaded via
+  `elixirc_paths(:test)` in `mix.exs` (avoids `test_load_filters` warnings from `mix test`).
 
 ### GenServer / OTP Conventions
 

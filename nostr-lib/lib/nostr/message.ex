@@ -15,8 +15,14 @@ defmodule Nostr.Message do
           | {:notice, String.t()}
           | {:ok, binary(), boolean(), String.t()}
           | {:auth, Nostr.Event.t() | binary()}
-          | {:count, String.t(), Nostr.Filter.t() | [Nostr.Filter.t()] | %{count: integer()}}
+          | {:count, String.t(), Nostr.Filter.t() | [Nostr.Filter.t()] | count_payload()}
           | {:closed, String.t(), String.t()}
+
+  @type count_payload() :: %{
+          required(:count) => integer(),
+          optional(:approximate) => boolean(),
+          optional(:hll) => binary()
+        }
 
   @doc """
   Generate post new event message
@@ -46,9 +52,11 @@ defmodule Nostr.Message do
   Generate count message (NIP-45).
 
   Can be used to request counts from relay (with filters) or respond with counts (with integer).
+
+  Parsed COUNT responses preserve optional `approximate` and `hll` keys when present.
   """
   @spec count(pos_integer() | Nostr.Filter.t() | [Nostr.Filter.t()], binary()) ::
-          {:count, binary(), %{count: pos_integer()} | Nostr.Filter.t() | [Nostr.Filter.t()]}
+          {:count, binary(), count_payload() | Nostr.Filter.t() | [Nostr.Filter.t()]}
   def count(count, sub_id) when is_integer(count), do: {:count, sub_id, %{count: count}}
   def count(%Nostr.Filter{} = filter, sub_id), do: {:count, sub_id, filter}
   def count(filters, sub_id) when is_list(filters), do: {:count, sub_id, filters}
@@ -199,13 +207,83 @@ defmodule Nostr.Message do
     {:closed, sub_id, message}
   end
 
-  defp do_parse(["COUNT", sub_id, %{"count" => count}], _type)
-       when is_binary(sub_id) and is_integer(count) do
-    {:count, sub_id, %{count: count}}
+  defp do_parse(["COUNT", sub_id, payload], _type)
+       when is_binary(sub_id) and is_map(payload) and :erlang.is_map_key("count", payload) do
+    case parse_count_payload(payload) do
+      {:ok, count_payload} -> {:count, sub_id, count_payload}
+      :error -> :error
+    end
+  end
+
+  defp do_parse(["COUNT", sub_id | filters], _type)
+       when is_binary(sub_id) and filters != [] do
+    case parse_count_filters(filters) do
+      {:ok, parsed_filters} -> {:count, sub_id, parsed_filters}
+      :error -> :error
+    end
   end
 
   defp do_parse(message, _type) do
     Logger.warning("Parsing unknown message: #{inspect(message)}")
     :error
+  end
+
+  defp parse_count_payload(%{"count" => count} = payload) when is_integer(count) do
+    with :ok <- validate_approximate(payload),
+         :ok <- validate_hll(payload) do
+      result = %{count: count}
+      result = maybe_put_optional(result, :approximate, payload, "approximate")
+      result = maybe_put_optional(result, :hll, payload, "hll")
+      {:ok, result}
+    else
+      :error -> :error
+    end
+  end
+
+  defp parse_count_payload(_payload), do: :error
+
+  defp parse_count_filters(filters) do
+    filters
+    |> Enum.reduce_while({:ok, []}, fn
+      %{"count" => _count}, _acc -> {:halt, :error}
+      filter, {:ok, acc} when is_map(filter) -> {:cont, {:ok, [Nostr.Filter.parse(filter) | acc]}}
+      _filter, _acc -> {:halt, :error}
+    end)
+    |> case do
+      {:ok, parsed_filters} -> {:ok, Enum.reverse(parsed_filters)}
+      :error -> :error
+    end
+  end
+
+  defp validate_approximate(payload) do
+    case Map.fetch(payload, "approximate") do
+      :error -> :ok
+      {:ok, value} when is_boolean(value) -> :ok
+      {:ok, _value} -> :error
+    end
+  end
+
+  defp validate_hll(payload) do
+    case Map.fetch(payload, "hll") do
+      :error -> :ok
+      {:ok, value} when is_binary(value) -> if(valid_hll_hex?(value), do: :ok, else: :error)
+      {:ok, _value} -> :error
+    end
+  end
+
+  defp valid_hll_hex?(value) when byte_size(value) == 512 do
+    case Base.decode16(value, case: :mixed) do
+      {:ok, decoded} -> byte_size(decoded) == 256
+      :error -> false
+    end
+  end
+
+  defp valid_hll_hex?(_value), do: false
+
+  defp maybe_put_optional(acc, key, payload, payload_key) do
+    case Map.fetch(payload, payload_key) do
+      {:ok, value} -> Map.put(acc, key, value)
+      :error -> acc
+    end
   end
 end

@@ -1,0 +1,9 @@
+# submodules
+nak/
+nips/
+
+# generated folders
+**/doc/
+**/deps/
+**/_build/
+.venv/

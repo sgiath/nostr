@@ -29,7 +29,10 @@ Every piece of data in Nostr is a signed JSON event:
   "pubkey": "<32-byte hex public key>",
   "created_at": 1234567890,
   "kind": 1,
-  "tags": [["e", "<event-id>"], ["p", "<pubkey>"]],
+  "tags": [
+    ["e", "<event-id>"],
+    ["p", "<pubkey>"]
+  ],
   "content": "hello world",
   "sig": "<64-byte hex schnorr signature>"
 }
@@ -37,37 +40,37 @@ Every piece of data in Nostr is a signed JSON event:
 
 ### Common Event Kinds
 
-| Kind | Description | NIP |
-|------|-------------|-----|
-| 0 | User metadata (profile) | NIP-01 |
-| 1 | Short text note | NIP-01 |
-| 3 | Follow list | NIP-02 |
-| 4 | Encrypted DM (deprecated) | NIP-04 |
-| 5 | Deletion request | NIP-09 |
-| 6 | Repost | NIP-18 |
-| 7 | Reaction | NIP-25 |
-| 1059 | Gift wrap | NIP-59 |
-| 1111 | Comment | NIP-22 |
-| 1222 | Audio note | -- |
-| 9735 | Zap receipt | NIP-57 |
-| 10002 | Relay list | NIP-65 |
-| 30023 | Long-form content | NIP-23 |
+| Kind  | Description               | NIP    |
+| ----- | ------------------------- | ------ |
+| 0     | User metadata (profile)   | NIP-01 |
+| 1     | Short text note           | NIP-01 |
+| 3     | Follow list               | NIP-02 |
+| 4     | Encrypted DM (deprecated) | NIP-04 |
+| 5     | Deletion request          | NIP-09 |
+| 6     | Repost                    | NIP-18 |
+| 7     | Reaction                  | NIP-25 |
+| 1059  | Gift wrap                 | NIP-59 |
+| 1111  | Comment                   | NIP-22 |
+| 1222  | Audio note                | --     |
+| 9735  | Zap receipt               | NIP-57 |
+| 10002 | Relay list                | NIP-65 |
+| 30023 | Long-form content         | NIP-23 |
 | 31922 | Date-based calendar event | NIP-52 |
 | 31923 | Time-based calendar event | NIP-52 |
-| 30617 | Git repository | NIP-34 |
+| 30617 | Git repository            | NIP-34 |
 
 Kinds 30000-39999 are parameterized replaceable events (NIP-33): identified by `kind` + `pubkey` + `d` tag. Publishing a new event with the same triplet replaces the old one.
 
 ### NIP-19 Identifiers
 
-| Prefix | Contains | Example Use |
-|--------|----------|-------------|
-| `npub1` | Public key | Identify a user |
-| `nsec1` | Secret key | Sign events (keep secret) |
-| `note1` | Event ID | Reference a specific event |
-| `nevent1` | Event ID + relay hints + author | Fetchable event reference |
-| `nprofile1` | Pubkey + relay hints | Fetchable profile reference |
-| `naddr1` | Kind + pubkey + d-tag + relays | Reference replaceable events |
+| Prefix      | Contains                        | Example Use                  |
+| ----------- | ------------------------------- | ---------------------------- |
+| `npub1`     | Public key                      | Identify a user              |
+| `nsec1`     | Secret key                      | Sign events (keep secret)    |
+| `note1`     | Event ID                        | Reference a specific event   |
+| `nevent1`   | Event ID + relay hints + author | Fetchable event reference    |
+| `nprofile1` | Pubkey + relay hints            | Fetchable profile reference  |
+| `naddr1`    | Kind + pubkey + d-tag + relays  | Reference replaceable events |
 
 ### Relay URLs
 
@@ -76,6 +79,7 @@ Relay arguments can be given as bare hostnames (`nos.lol`), full URLs (`wss://no
 ### Secret Key Formats
 
 The `--sec` flag (and `$NOSTR_SECRET_KEY` env var) accepts:
+
 - 64-char hex string
 - `nsec1...` bech32-encoded key
 - `ncryptsec1...` NIP-49 password-encrypted key (will prompt for password)
@@ -127,6 +131,7 @@ nak event -c 'hello' --nevent wss://nos.lol
 ```
 
 **Key flags:**
+
 - `-c, --content` -- event content (prefix with `@` to read from file: `-c @file.md`)
 - `-k, --kind` -- event kind (default: 1)
 - `-t, --tag` -- add tag: `-t key=value` or `-t key=v1;v2;v3` for multi-value
@@ -203,6 +208,7 @@ nak req --only-missing ./events.jsonl -k 30617 pyramid.fiatjaf.com
 ```
 
 **Key flags:**
+
 - `-k, --kind` -- filter by kind (repeatable)
 - `-a, --author` -- filter by author pubkey (repeatable)
 - `-i, --id` -- filter by event ID (repeatable)
@@ -647,17 +653,17 @@ nak req -k 1 -a <pubkey> -l 10 wss://relay.damus.io \
 
 ## Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
+| Variable           | Purpose                                                   |
+| ------------------ | --------------------------------------------------------- |
 | `NOSTR_SECRET_KEY` | Default signing key (hex, nsec, ncryptsec, or bunker URL) |
-| `NOSTR_CLIENT_KEY` | Client identity key for NIP-46 bunker communication |
+| `NOSTR_CLIENT_KEY` | Client identity key for NIP-46 bunker communication       |
 
 ## Global Flags
 
-| Flag | Effect |
-|------|--------|
-| `-q, --quiet` | Suppress stderr logs; `-qq` also suppresses stdout |
-| `-v, --verbose` | Extra debug output |
+| Flag            | Effect                                             |
+| --------------- | -------------------------------------------------- |
+| `-q, --quiet`   | Suppress stderr logs; `-qq` also suppresses stdout |
+| `-v, --verbose` | Extra debug output                                 |
 
 ## Tips
 

@@ -297,6 +297,76 @@ defmodule Nostr.MessageTest do
       assert sub_id == "sub123"
       assert count == 42
     end
+
+    test "parses COUNT message with approximate flag" do
+      json = ~s(["COUNT","sub123",{"count":42,"approximate":true}])
+
+      {:count, sub_id, payload} = Nostr.Message.parse(json)
+      assert sub_id == "sub123"
+      assert payload == %{count: 42, approximate: true}
+    end
+
+    test "parses COUNT message with hll payload" do
+      hll = String.duplicate("0", 512)
+      json = ~s(["COUNT","sub123",{"count":42,"hll":"#{hll}"}])
+
+      {:count, sub_id, payload} = Nostr.Message.parse(json)
+      assert sub_id == "sub123"
+      assert payload == %{count: 42, hll: hll}
+    end
+
+    test "parses COUNT message with approximate and hll" do
+      hll = String.duplicate("a", 512)
+      json = ~s(["COUNT","sub123",{"count":42,"approximate":false,"hll":"#{hll}"}])
+
+      {:count, sub_id, payload} = Nostr.Message.parse(json)
+      assert sub_id == "sub123"
+      assert payload == %{count: 42, approximate: false, hll: hll}
+    end
+
+    test "parses COUNT request message with single filter" do
+      json = ~s(["COUNT","sub123",{"kinds":[1],"limit":10}])
+
+      {:count, sub_id, [filter]} = Nostr.Message.parse(json)
+      assert sub_id == "sub123"
+      assert filter.kinds == [1]
+      assert filter.limit == 10
+    end
+
+    test "parses COUNT request message with multiple filters" do
+      json = ~s(["COUNT","sub123",{"kinds":[1]},{"kinds":[7],"limit":20}])
+
+      {:count, sub_id, [filter_a, filter_b]} = Nostr.Message.parse(json)
+      assert sub_id == "sub123"
+      assert filter_a.kinds == [1]
+      assert filter_b.kinds == [7]
+      assert filter_b.limit == 20
+    end
+
+    @tag :capture_log
+    test "returns error for COUNT response with invalid approximate type" do
+      json = ~s(["COUNT","sub123",{"count":42,"approximate":"yes"}])
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
+    test "returns error for COUNT response with invalid hll type" do
+      json = ~s(["COUNT","sub123",{"count":42,"hll":5}])
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
+    test "returns error for COUNT response with invalid hll length" do
+      json = ~s(["COUNT","sub123",{"count":42,"hll":"0011"}])
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
+    test "returns error for COUNT response with non-hex hll" do
+      invalid_hll = String.duplicate("z", 512)
+      json = ~s(["COUNT","sub123",{"count":42,"hll":"#{invalid_hll}"}])
+      assert Nostr.Message.parse(json) == :error
+    end
   end
 
   describe "closed/2" do
@@ -332,6 +402,23 @@ defmodule Nostr.MessageTest do
 
       decoded = JSON.decode!(json)
       assert decoded == ["COUNT", "sub123", %{"count" => 42}]
+    end
+
+    test "count response roundtrip with optional fields" do
+      hll = String.duplicate("f", 512)
+      msg = {:count, "sub123", %{count: 42, approximate: true, hll: hll}}
+      json = Nostr.Message.serialize(msg)
+
+      decoded = JSON.decode!(json)
+
+      assert decoded == [
+               "COUNT",
+               "sub123",
+               %{"count" => 42, "approximate" => true, "hll" => hll}
+             ]
+
+      {:count, "sub123", parsed_payload} = Nostr.Message.parse(json)
+      assert parsed_payload == %{count: 42, approximate: true, hll: hll}
     end
   end
 

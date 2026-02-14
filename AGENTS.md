@@ -19,6 +19,11 @@ niamh/
 `nak/` and `nips/` are read-only reference submodules. The NIP specs in `nips/` are
 the authoritative source for protocol behavior.
 
+## Definition of Done
+
+For all Elixir libraries/apps in this repo, a task is not done until
+`mix check --fix` passes successfully in the relevant project directory.
+
 ## nostr-lib — Build & Test Commands
 
 All commands run from `nostr-lib/` directory.
@@ -49,7 +54,7 @@ mix test --exclude nip05_http        # skip HTTP-dependent tests
 mix test --exclude ecdh              # skip ECDH tests
 
 # Full pre-commit check (compile + unused deps + format + credo + prettier + tests)
-mix check
+mix check --fix
 ```
 
 `mix check` runs the full pipeline defined in `.check.exs`:
@@ -185,11 +190,11 @@ python vanity_npub.py bip39 <seed words>   # NIP-06 key derivation
 
 ## Key Dependencies (nostr-lib)
 
-| Package         | Purpose                          |
-| --------------- | -------------------------------- |
-| `lib_secp256k1` | Schnorr signatures, ECDH         |
-| `bechamel`      | Bech32 encoding                  |
-| `scrypt`        | NIP-49 key derivation            |
-| `req`           | Optional: NIP-05 HTTP lookup     |
-| `ex_check`      | Dev: runs `mix check` pipeline   |
-| `credo`         | Dev: linting                     |
+| Package         | Purpose                        |
+| --------------- | ------------------------------ |
+| `lib_secp256k1` | Schnorr signatures, ECDH       |
+| `bechamel`      | Bech32 encoding                |
+| `scrypt`        | NIP-49 key derivation          |
+| `req`           | Optional: NIP-05 HTTP lookup   |
+| `ex_check`      | Dev: runs `mix check` pipeline |
+| `credo`         | Dev: linting                   |
