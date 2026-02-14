@@ -8,11 +8,10 @@ Monorepo for Nostr-related Elixir libraries and tools. Nix flake dev environment
 ```
 niamh/
 ├── nostr-lib/         # Elixir library: low-level Nostr protocol (pure lib, no OTP app)
-├── nostr-client/      # Elixir OTP app: Nostr relay WebSocket client (mint_web_socket)
+├── nostr-client/      # Elixir library: Nostr relay WebSocket client (mint_web_socket)
 ├── nak/               # Git submodule: fiatjaf/nak CLI (reference, do not edit)
 ├── nips/              # Git submodule: nostr-protocol/nips specs (reference, do not edit)
 ├── skills/nostr/      # nak CLI skill/reference doc
-├── vanity_npub.py     # Python utility: vanity npub generator + NIP-06 BIP39 derivation
 └── flake.nix          # Nix dev shell (elixir, nodejs, python3, secp256k1, prettier)
 ```
 
