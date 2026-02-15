@@ -1,6 +1,8 @@
 defmodule Nostr.Client.TestSupport do
   @moduledoc false
 
+  alias Nostr.Client.SessionKey
+
   defmodule FakeTransport do
     @moduledoc false
 
@@ -115,5 +117,108 @@ defmodule Nostr.Client.TestSupport do
     1
     |> Nostr.Event.create(pubkey: TestSigner.pubkey(), content: content)
     |> Nostr.Event.sign(String.duplicate("1", 64))
+  end
+
+  @spec relay_available?(binary()) :: :ok | {:error, term()}
+  def relay_available?(relay_url) when is_binary(relay_url) do
+    uri = URI.parse(relay_url)
+    host = uri.host
+    port = uri.port || default_port(uri.scheme)
+
+    if is_binary(host) && is_integer(port) do
+      case :gen_tcp.connect(String.to_charlist(host), port, [:binary, active: false], 2_000) do
+        {:ok, socket} ->
+          :gen_tcp.close(socket)
+          :ok
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    else
+      {:error, :invalid_relay_url}
+    end
+  end
+
+  @spec default_port(String.t() | nil) :: 443 | 80
+  defp default_port("wss"), do: 443
+  defp default_port("ws"), do: 80
+  defp default_port(_), do: 80
+
+  @spec wait_for_connected(pid(), binary(), pos_integer()) :: :ok | {:error, term()}
+  def wait_for_connected(pid, relay_url), do: wait_for_connected(pid, relay_url, 15_000)
+
+  def wait_for_connected(pid, relay_url, timeout_ms)
+      when is_pid(pid) and is_binary(relay_url) and is_integer(timeout_ms) and timeout_ms > 0 do
+    expected = normalize_relay_url(relay_url)
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    do_wait_for_connected(pid, expected, deadline)
+  end
+
+  defp do_wait_for_connected(pid, expected_relay_url, deadline_ms) do
+    if relay_session_connected?(pid) or session_connected?(pid, expected_relay_url) do
+      :ok
+    else
+      now = System.monotonic_time(:millisecond)
+      remaining = deadline_ms - now
+
+      if remaining <= 0 do
+        {:error, :timeout}
+      else
+        receive do
+          {:nostr_client, :connected, ^pid, relay_url} ->
+            if normalize_relay_url(relay_url) == expected_relay_url,
+              do: :ok,
+              else: do_wait_for_connected(pid, expected_relay_url, deadline_ms)
+
+          {:nostr_client, :disconnected, ^pid, _reason} ->
+            {:error, :disconnected}
+        after
+          min(remaining, 500) ->
+            do_wait_for_connected(pid, expected_relay_url, deadline_ms)
+        end
+      end
+    end
+  end
+
+  defp relay_session_connected?(pid) do
+    case process_state(pid) do
+      %{phase: :connected} -> true
+      _other -> false
+    end
+  end
+
+  defp session_connected?(pid, expected_relay_url) do
+    case process_state(pid) do
+      %{relays: relays} when is_map(relays) ->
+        relays
+        |> Map.values()
+        |> Enum.any?(fn
+          %{relay_url: relay_url, session_pid: relay_pid} ->
+            normalize_relay_url(relay_url) == expected_relay_url and
+              relay_session_connected?(relay_pid)
+
+          _entry ->
+            false
+        end)
+
+      _other ->
+        false
+    end
+  end
+
+  defp process_state(pid) do
+    try do
+      :sys.get_state(pid)
+    catch
+      _kind, _reason -> nil
+    end
+  end
+
+  defp normalize_relay_url(relay_url) when is_binary(relay_url) do
+    case SessionKey.normalize_relay_url(relay_url) do
+      {:ok, normalized_relay_url} -> normalized_relay_url
+      {:error, _} -> relay_url
+    end
   end
 end

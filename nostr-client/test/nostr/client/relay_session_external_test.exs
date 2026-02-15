@@ -13,6 +13,7 @@ defmodule Nostr.Client.RelaySessionExternalTest do
 
   alias Nostr.Client
   alias Nostr.Client.RelaySession
+  alias Nostr.Client.TestSupport
 
   @moduletag :external
 
@@ -36,6 +37,15 @@ defmodule Nostr.Client.RelaySessionExternalTest do
     end
   end
 
+  setup do
+    relay_url = Application.fetch_env!(:nostr_client, :e2e_relay_url)
+
+    case TestSupport.relay_available?(relay_url) do
+      :ok -> :ok
+      {:error, reason} -> {:skip, "e2e relay unavailable: #{inspect(reason)}"}
+    end
+  end
+
   describe "external relay session" do
     test "connects to configured relay" do
       relay_url = Application.fetch_env!(:nostr_client, :e2e_relay_url)
@@ -54,11 +64,13 @@ defmodule Nostr.Client.RelaySessionExternalTest do
         end
       end)
 
-      assert_receive {:nostr_client, :connected, ^pid, ^relay_url}, 15_000
+      assert :ok = TestSupport.wait_for_connected(pid, relay_url)
       assert :connected == RelaySession.status(pid)
 
+      ref = Process.monitor(pid)
+
       assert :ok == RelaySession.close(pid)
-      assert_receive {:nostr_client, :disconnected, ^pid, :normal}, 5_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
     end
   end
 end

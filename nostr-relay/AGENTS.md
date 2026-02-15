@@ -55,3 +55,13 @@ This folder is intentionally scoped as an **implementation intent** today.
 
 - This file should be updated whenever milestone goals change.
 - Keep implementation notes focused on relay-specific decisions; generic build notes belong in project root docs.
+
+## Non-Obvious Learnings
+
+- `@moduletag :integration` tests are now opt-in in `nostr-relay` by default:
+  `test_helper.exs` runs `ExUnit.configure(exclude: [integration: true])` before `ExUnit.start/0`.
+- WebSocket smoke test setup using `Mint.WebSocket` is sensitive to request handling shape:
+  call `WebSocket.upgrade/4` first, then process the initial upgrade message and only create
+  the websocket with `WebSocket.new/4` after matching the `101` response headers.
+- `WebSocket.stream/2` can return `:unknown` during integration handshake/message flow,
+  so test helpers should retry instead of treating it as terminal failure.

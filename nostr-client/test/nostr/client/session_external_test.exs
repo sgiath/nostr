@@ -8,6 +8,7 @@ defmodule Nostr.Client.SessionExternalTest do
   use ExUnit.Case, async: false
 
   alias Nostr.Client
+  alias Nostr.Client.TestSupport
 
   @moduletag :external
 
@@ -28,6 +29,15 @@ defmodule Nostr.Client.SessionExternalTest do
 
     def sign_client_auth(_pubkey, _relay_url, _challenge) do
       {:error, :unknown_pubkey}
+    end
+  end
+
+  setup do
+    relay_url = Application.fetch_env!(:nostr_client, :e2e_relay_url)
+
+    case TestSupport.relay_available?(relay_url) do
+      :ok -> :ok
+      {:error, reason} -> {:skip, "e2e relay unavailable: #{inspect(reason)}"}
     end
   end
 
@@ -52,7 +62,7 @@ defmodule Nostr.Client.SessionExternalTest do
       assert {:ok, [relay_entry]} = Client.list_relays(session_pid)
       assert relay_entry.relay_url == relay_url
 
-      assert_receive {:nostr_client, :connected, _relay_pid, ^relay_url}, 15_000
+      assert :ok = TestSupport.wait_for_connected(session_pid, relay_url)
 
       assert :ok = Client.stop_session(session_pid)
     end

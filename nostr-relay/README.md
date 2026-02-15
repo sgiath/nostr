@@ -66,10 +66,48 @@ mix run --no-halt
 
 The command set above is the **target shape**; code is not yet complete.
 
+## Current Runtime Semantics
+
+- Each HTTP request to `/` flows through `Nostr.Relay.Web.Router`.
+- A valid WebSocket request is upgraded with `Plug.Conn.upgrade_adapter/3` and handled by
+  `Nostr.Relay.Web.SocketHandler`.
+- `WebSock` treats `SocketHandler` as a per-connection process callback, so each incoming
+  connection gets its own state struct.
+- `SocketHandler` delegates frame routing to `Nostr.Relay.Web.MessageRouter` and
+  per-connection state updates to `Nostr.Relay.Web.ConnectionState`.
+
+This means the project is currently in a good shape for future relay expansion: message parsing,
+connection lifecycle hooks, and per-connection subscription state are all isolated from one another.
+
+Suggested refactors before full relay logic:
+
+1. Add a websocket integration smoke test across two real websocket connections (tagged `:integration`).
+2. Keep `SocketHandler` transport-only and add protocol logic only through
+   `Nostr.Relay.Web.MessageRouter`.
+3. Extend `Nostr.Relay.Web.ConnectionState` with persistence, limits, and per-connection policy
+   counters as relay behavior grows.
+
 ## Contributing Notes
 
 - Follow `nostr-lib` style guidance for all relay-related modules when implementation begins.
 - Keep protocol behavior incremental (small tracer bullets), then expand to feature-complete relay behavior.
+
+## Testing Conventions
+
+- Unit tests and callback/router tests are part of the default test run.
+- Real websocket integration coverage is tagged with `:integration` in `test/nostr/relay/web/websocket_smoke_integration_test.exs`.
+- Integration tests are opt-in by default:
+
+```bash
+mix test              # excludes @tag :integration
+mix test --only integration  # run websocket integration test
+```
+
+### Concurrency Invariant
+
+- Per-connection checks already validate state isolation:
+  - `test/nostr/relay/web/message_router_test.exs` validates identical subscription IDs are scoped to each state.
+  - `test/nostr/relay/web/websocket_smoke_integration_test.exs` runs two websocket clients in parallel to confirm independent flows.
 
 ## Next Action
 

@@ -9,6 +9,7 @@ defmodule Nostr.Client.CountExternalTest do
 
   alias Nostr.Client
   alias Nostr.Client.RelaySession
+  alias Nostr.Client.TestSupport
 
   @moduletag :external
 
@@ -32,6 +33,15 @@ defmodule Nostr.Client.CountExternalTest do
     end
   end
 
+  setup do
+    relay_url = Application.fetch_env!(:nostr_client, :e2e_relay_url)
+
+    case TestSupport.relay_available?(relay_url) do
+      :ok -> :ok
+      {:error, reason} -> {:skip, "e2e relay unavailable: #{inspect(reason)}"}
+    end
+  end
+
   describe "count/4" do
     @tag skip: "nostr.sgiath.dev does not support COUNT"
     test "returns COUNT payload from configured relay" do
@@ -51,7 +61,7 @@ defmodule Nostr.Client.CountExternalTest do
         end
       end)
 
-      assert_receive {:nostr_client, :connected, ^session_pid, ^relay_url}, 15_000
+      assert :ok = TestSupport.wait_for_connected(session_pid, relay_url)
 
       assert {:ok, payload} =
                Client.count(relay_url, [%Nostr.Filter{kinds: [1]}], opts, 15_000)

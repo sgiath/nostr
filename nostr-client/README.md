@@ -134,6 +134,31 @@ def deps do
     {:nostr_client, "~> 0.1.0"}
   ]
 end
+
+## Local End-to-End Relay Tests
+
+Use one command from the repository root to run e2e tests against a local relay:
+
+```bash
+./e2e
+```
+
+The script starts `nostr-relay`, configures `NOSTR_E2E_RELAY_URL`, runs
+`mix test --include external` inside `nostr-client`, and shuts the relay down on
+exit.
+
+Manual mode:
+
+```bash
+cd nostr-relay
+MIX_ENV=dev NOSTR_RELAY_ENABLED=true NOSTR_RELAY_PORT=4002 mix run --no-halt
+
+cd ../nostr-client
+NOSTR_E2E_RELAY_URL=ws://127.0.0.1:4002/ mix test --include external
+```
+
+`mix test` (without `--include external`) continues to skip all `:external` tests by
+default via `nostr-client/test/test_helper.exs`.
 ```
 
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)

@@ -1,4 +1,4 @@
 import Config
 
 config :nostr_client,
-  e2e_relay_url: "wss://nostr.sgiath.dev/"
+  e2e_relay_url: System.get_env("NOSTR_E2E_RELAY_URL") || "wss://nostr.sgiath.dev/"

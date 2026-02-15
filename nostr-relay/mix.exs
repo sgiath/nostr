@@ -28,8 +28,10 @@ defmodule NostrRelay.MixProject do
     [
       {:nostr_lib, path: "../nostr-lib"},
       {:bandit, "~> 1.10"},
+      {:websock, "~> 0.5"},
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, "~> 0.22"},
+      {:mint_web_socket, "~> 1.0", only: :test},
 
       # Development
       {:ex_check, "~> 0.16", only: [:dev], runtime: false},
