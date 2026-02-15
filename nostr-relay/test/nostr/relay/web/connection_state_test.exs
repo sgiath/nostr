@@ -6,7 +6,7 @@ defmodule Nostr.Relay.Web.ConnectionStateTest do
   describe "lifecycle" do
     test "creates an empty initial state" do
       assert %ConnectionState{messages: 0, subscriptions: subscriptions} = ConnectionState.new()
-      assert MapSet.size(subscriptions) == 0
+      assert map_size(subscriptions) == 0
     end
 
     test "converts to map form for testing" do
@@ -16,7 +16,7 @@ defmodule Nostr.Relay.Web.ConnectionStateTest do
         |> ConnectionState.inc_messages()
 
       assert %{messages: 1, subscriptions: subscriptions} = ConnectionState.to_map(state)
-      assert MapSet.member?(subscriptions, "sub-map")
+      assert subscriptions["sub-map"] == []
     end
   end
 

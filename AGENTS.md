@@ -1,4 +1,4 @@
-# Niamh Monorepo
+# Nostr Monorepo
 
 Monorepo for Nostr-related Elixir libraries and tools. Nix flake dev environment
 (Erlang 28, Elixir 1.19). Uses `direnv` + `flake.nix` for shell setup.
@@ -6,7 +6,7 @@ Monorepo for Nostr-related Elixir libraries and tools. Nix flake dev environment
 ## Repository Layout
 
 ```
-niamh/
+nostr/
 ├── nostr-lib/         # Elixir library: low-level Nostr protocol (pure lib, no OTP app)
 ├── nostr-client/      # Elixir library: Nostr relay WebSocket client (mint_web_socket)
 ├── nak/               # Git submodule: fiatjaf/nak CLI (reference, do not edit)

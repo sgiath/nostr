@@ -26,6 +26,33 @@ defmodule Nostr.Relay.Web.RouterTest do
       assert response.resp_body =~ "WebSocket relay is reachable at this endpoint"
     end
 
+    test "serves NIP-11 relay info when requested" do
+      conn =
+        conn(:get, "/")
+        |> put_req_header("accept", "application/nostr+json")
+
+      response = Router.call(conn, Router.init([]))
+
+      assert response.state == :sent
+      assert response.status == 200
+
+      content_type =
+        response
+        |> get_resp_header("content-type")
+        |> Enum.at(0)
+
+      assert content_type == "application/nostr+json; charset=utf-8"
+
+      info =
+        response.resp_body
+        |> JSON.decode!()
+
+      assert info["name"] == "Nostr Relay"
+      assert info["supported_nips"] == [1, 11, 45]
+      assert info["software"] == "nostr_relay"
+      assert is_map(info["limits"])
+    end
+
     test "upgrades websocket requests" do
       conn =
         conn(:get, "/")

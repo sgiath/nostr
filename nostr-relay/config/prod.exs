@@ -1,10 +1,11 @@
 import Config
 
-config :nostr_relay, Nostr.Relay.Repo,
-  database: "relay_prod.db",
-  default_transaction_mode: :immediate
+config :nostr_relay, Nostr.Relay.Repo, database: "relay_prod.db"
 
 config :nostr_relay, :server,
-  enabled: true,
   ip: {0, 0, 0, 0},
   port: 4000
+
+config :nostr_relay, :relay_info,
+  name: "Nostr Relay",
+  description: "A focused, test-first Nostr relay implementation."

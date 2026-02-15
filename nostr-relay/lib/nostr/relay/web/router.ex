@@ -6,6 +6,8 @@ defmodule Nostr.Relay.Web.Router do
 
   - If the request is a valid WebSocket upgrade request, we hand it to
     `Nostr.Relay.Web.SocketHandler` via `Conn.upgrade_adapter/3`.
+  - If the request accepts `application/nostr+json`, we return the NIP-11 relay
+    information document.
   - Otherwise, a lightweight landing page is served.
 
   The upgraded WebSocket handler receives per-connection state and callbacks
@@ -15,8 +17,9 @@ defmodule Nostr.Relay.Web.Router do
   use Plug.Router
 
   alias Plug.Conn
-  alias Nostr.Relay.Web.Page
   alias Nostr.Relay.Web.ConnectionState
+  alias Nostr.Relay.Web.Page
+  alias Nostr.Relay.Web.RelayInfo
   alias Nostr.Relay.Web.SocketHandler
 
   plug(:match)
@@ -26,9 +29,15 @@ defmodule Nostr.Relay.Web.Router do
     if websocket_request?(conn) do
       websocket_upgrade(conn)
     else
-      conn
-      |> Conn.put_resp_content_type("text/html")
-      |> send_resp(200, Page.html())
+      if metadata_request?(conn) do
+        conn
+        |> Conn.put_resp_content_type("application/nostr+json")
+        |> send_resp(200, RelayInfo.json())
+      else
+        conn
+        |> Conn.put_resp_content_type("text/html")
+        |> send_resp(200, Page.html())
+      end
     end
   end
 
@@ -64,6 +73,17 @@ defmodule Nostr.Relay.Web.Router do
 
   defp header_present?(%Conn{} = conn, name),
     do: Conn.get_req_header(conn, name) != []
+
+  defp metadata_request?(%Conn{} = conn) do
+    Conn.get_req_header(conn, "accept")
+    |> Enum.any?(fn header ->
+      header
+      |> String.split(",", trim: true)
+      |> Enum.any?(fn candidate ->
+        String.starts_with?(String.downcase(String.trim(candidate)), "application/nostr+json")
+      end)
+    end)
+  end
 
   defp websocket_upgrade(conn) do
     conn =

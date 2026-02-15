@@ -10,7 +10,9 @@ defmodule Nostr.Relay.Web.SocketHandler do
   Current behavior intentionally remains protocol-surface only:
 
   - ACK `EVENT` frames with `OK`
-  - Track active `REQ` subscription IDs and emit `EOSE`
+  - Track active `REQ` subscription IDs and filters
+  - Replay matching stored events on `REQ` and emit `EOSE`
+  - Dispatch accepted `EVENT`s to matching active subscriptions
   - Handle `CLOSE` by removing local subscription state
   - Reject invalid payloads with a `NOTICE`
   - Ignore non-text frames for now (NIP-01 is JSON text based)

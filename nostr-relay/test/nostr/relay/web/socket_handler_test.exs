@@ -1,5 +1,5 @@
 defmodule Nostr.Relay.Web.SocketHandlerTest do
-  use ExUnit.Case, async: true
+  use Nostr.Relay.DataCase, async: false
 
   alias Nostr.Event
   alias Nostr.Filter
@@ -31,7 +31,7 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
                %{messages: 1, subscriptions: subscriptions}
              } = SocketHandler.handle_in({request, opcode: :text}, state)
 
-      assert MapSet.member?(subscriptions, "subscription-1")
+      assert [%Filter{}] = subscriptions["subscription-1"]
     end
 
     test "removes subscription on CLOSE" do
@@ -45,7 +45,7 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
       {:push, [_frame], %{subscriptions: subscriptions} = state_after_req} =
         SocketHandler.handle_in({request, opcode: :text}, state)
 
-      assert MapSet.member?(subscriptions, "subscription-1")
+      assert [%Filter{}] = subscriptions["subscription-1"]
 
       close = Message.close("subscription-1") |> Message.serialize()
 
@@ -54,7 +54,7 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
                %{messages: 2, subscriptions: final_subscriptions}
              } = SocketHandler.handle_in({close, opcode: :text}, state_after_req)
 
-      refute MapSet.member?(final_subscriptions, "subscription-1")
+      refute is_map_key(final_subscriptions, "subscription-1")
     end
 
     test "returns notice for invalid json" do
@@ -87,7 +87,7 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
                SocketHandler.handle_in({close, opcode: :text}, state_after_req)
 
       assert final_count == 2
-      refute MapSet.member?(subscriptions, "sub-seq")
+      refute is_map_key(subscriptions, "sub-seq")
     end
 
     test "ignores binary frames" do

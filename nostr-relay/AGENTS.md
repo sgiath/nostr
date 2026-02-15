@@ -9,9 +9,10 @@ This folder is intentionally scoped as an **implementation intent** today.
 
 ## Current Position
 
-- No production relay code is expected in this commit.
+- The websocket message path now runs through `Nostr.Relay.Pipeline.*`.
 - `README.md` documents the intended behavior and milestone sequence.
-- Actual protocol modules, router, WebSocket handler, and store integration are planned, not finalized.
+- Core protocol handling and pipeline execution are implemented and test-covered for
+  the core request slice.
 
 ## Coding Constraints for Future Relay Work
 
@@ -34,10 +35,25 @@ This folder is intentionally scoped as an **implementation intent** today.
 
 1. Baseline HTTP/WebSocket bootstrap using `Bandit` and `WebSock`.
 2. SQLite-backed event store + deterministic filter matching.
-3. `EVENT`/`REQ`/`CLOSE`/`EOSE`/`OK` message handling.
-4. Relay info and policy endpoints.
+3. `EVENT`/`REQ`/`CLOSE`/`EOSE`/`OK` message handling. **(Implemented.)**
+4. Relay controls + info endpoints. **(Implemented for NIP-11 metadata and limits.)**
 5. Tests for parser/filter/store/protocol flow.
 6. Storage hardening: SQLite indexes, compaction, retention, and recovery behavior.
+
+## Pipeline Status
+
+- Stage engine: `Nostr.Relay.Pipeline.Engine`
+- Shared context: `Nostr.Relay.Pipeline.Context`
+- Stage behaviour: `Nostr.Relay.Pipeline.Stage`
+- Handler stages:
+  - `Nostr.Relay.Pipeline.Stages.ProtocolValidator`
+  - `Nostr.Relay.Pipeline.Stages.MessageValidator`
+  - `Nostr.Relay.Pipeline.Stages.RelayPolicyValidator`
+  - `Nostr.Relay.Pipeline.Stages.MessageHandler`
+  - `Nostr.Relay.Pipeline.Stages.StorePolicy`
+
+Current default stage order is protocol parse -> message validation -> relay policy ->
+message handling -> store policy.
 
 ## Storage Baseline
 
@@ -47,9 +63,10 @@ This folder is intentionally scoped as an **implementation intent** today.
 ### Milestone Acceptance Checks
 
 - M1: websocket connect and `Nostr.Message` round trips with invalid messages handled as `:error`.
-- M2: filter matching reproduces NIP-01 semantics (AND inside filter, OR across filters).
-- M3: `EVENT`/`OK`, `REQ`/`EVENT`/`EOSE`, `CLOSE`/`CLOSED` message lifecycle implemented end-to-end.
-- M4: `NIP-11` metadata endpoint advertises exact supported NIPs and limits.
+- M2: pipeline stages execute with explicit `{:ok, context}` / `{:error, reason, context}` contracts.
+- M3: filter matching reproduces NIP-01 semantics (AND inside filter, OR across filters).
+- M4: `EVENT`/`OK`, `REQ`/`EVENT`/`EOSE`, `CLOSE`/`CLOSED` message lifecycle implemented end-to-end for core path.
+- M5: `NIP-11` metadata endpoint advertises exact supported NIPs and limits. **(Implemented.)**
 
 ## Notes
 

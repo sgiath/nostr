@@ -39,7 +39,7 @@
    - Include relay-side reasons for failure using standardized prefixes.
 
 4. **M4: Relay controls + info**
-   - Add `NIP-11` `/` metadata response with supported NIPs and limits.
+   - Add `NIP-11` `/` metadata response with supported NIPs and limits. **(Implemented.)**
    - Add basic rate/size/write limits and consistent `NOTICE/CLOSED` policy reasons.
 
 5. **M5: Optional protocol expansions**
@@ -59,6 +59,8 @@ Start with a single slice in M1: websocket connect + parse incoming `REQ`, persi
 Planned run target:
 
 ```bash
+mix ecto.create
+mix ecto.migrate
 mix deps.get
 mix compile
 mix run --no-halt
@@ -66,11 +68,27 @@ mix run --no-halt
 
 The command set above is the **target shape**; code is not yet complete.
 
+## Runtime Database Setup
+
+The relay now uses an Ecto migration for its SQLite schema:
+
+- `priv/repo/migrations/20260215000001_create_relay_events.exs`
+
+Before first run (or after a fresh clone), prepare the DB once:
+
+```bash
+mix ecto.create
+mix ecto.migrate
+```
+
+The `nostr-relay` test helper also runs these two commands before `ExUnit.start/0`.
+
 ## Current Runtime Semantics
 
 - Each HTTP request to `/` flows through `Nostr.Relay.Web.Router`.
-- A valid WebSocket request is upgraded with `Plug.Conn.upgrade_adapter/3` and handled by
-  `Nostr.Relay.Web.SocketHandler`.
+  - A valid WebSocket request is upgraded with `Plug.Conn.upgrade_adapter/3` and handled by
+    `Nostr.Relay.Web.SocketHandler`.
+  - If the request accepts `application/nostr+json`, a NIP-11 metadata document is returned.
 - `WebSock` treats `SocketHandler` as a per-connection process callback, so each incoming
   connection gets its own state struct.
 - `SocketHandler` delegates frame routing to `Nostr.Relay.Web.MessageRouter` and
