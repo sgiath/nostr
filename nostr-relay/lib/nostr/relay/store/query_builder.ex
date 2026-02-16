@@ -20,6 +20,7 @@ defmodule Nostr.Relay.Store.QueryBuilder do
       filters
       |> Enum.flat_map(&execute_single_filter/1)
       |> deduplicate_records()
+      |> apply_expiration_filter()
       |> apply_replacement_collapse(filters)
       |> apply_deletion_filter()
       |> sort_records(filters)
@@ -67,8 +68,12 @@ defmodule Nostr.Relay.Store.QueryBuilder do
         |> Repo.one()
 
       case record do
-        nil -> false
-        _record -> apply_deletion_filter([record]) != []
+        nil ->
+          false
+
+        _record ->
+          record = apply_expiration_filter([record])
+          apply_deletion_filter(record) != []
       end
     end)
   end
@@ -83,6 +88,7 @@ defmodule Nostr.Relay.Store.QueryBuilder do
       filters
       |> Enum.flat_map(&execute_single_filter/1)
       |> deduplicate_records()
+      |> apply_expiration_filter()
       |> apply_replacement_collapse(filters)
       |> apply_deletion_filter()
       |> Enum.count()
@@ -247,6 +253,79 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     visible_records
   end
 
+  # --- expiration (NIP-40) ---
+
+  defp apply_expiration_filter(records) when records == [] do
+    records
+  end
+
+  defp apply_expiration_filter(records) when is_list(records) do
+    now = DateTime.to_unix(DateTime.utc_now())
+    expired_ids = expired_event_ids(records, now)
+
+    Enum.reject(records, fn record ->
+      MapSet.member?(expired_ids, record.event_id)
+    end)
+  end
+
+  defp expired_event_ids(_records, now) when not is_integer(now) do
+    MapSet.new()
+  end
+
+  defp expired_event_ids(records, now) when is_list(records) and is_integer(now) do
+    Enum.reduce(records, MapSet.new(), fn record, expired_ids ->
+      case record_expired?(record, now) do
+        true -> MapSet.put(expired_ids, record.event_id)
+        false -> expired_ids
+      end
+    end)
+  end
+
+  defp record_expired?(%EventRecord{raw_json: raw_json}, now) when is_binary(raw_json) do
+    case JSON.decode(raw_json) do
+      {:ok, %{"tags" => tags}} when is_list(tags) ->
+        Enum.any?(tags, fn
+          ["expiration", value | _] -> expired_expiration_tag?(value, now)
+          ["expiration" | _] -> false
+          _ -> false
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  defp record_expired?(_record, _now), do: false
+
+  defp expired_expiration_tag?(value, now) do
+    with {:ok, timestamp} <- parse_expiration_timestamp(value) do
+      timestamp <= now
+    else
+      _ -> false
+    end
+  end
+
+  defp parse_expiration_timestamp(value) when is_integer(value) do
+    {:ok, value}
+  end
+
+  defp parse_expiration_timestamp(value) when is_float(value) do
+    if Float.floor(value) == value do
+      {:ok, trunc(value)}
+    else
+      :error
+    end
+  end
+
+  defp parse_expiration_timestamp(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {timestamp, ""} -> {:ok, timestamp}
+      _ -> :error
+    end
+  end
+
+  defp parse_expiration_timestamp(_value), do: :error
+
   defp apply_deletion_filter_to_records(records, all_records) do
     if records == [] do
       all_records
@@ -273,20 +352,27 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     if pubkeys == [] do
       %{event_id_rules: %{}, address_rules: %{}}
     else
-      deletion_event_records = deletion_events_for_pubkeys(pubkeys)
+      now = DateTime.to_unix(DateTime.utc_now())
+
+      deletion_event_records =
+        deletion_events_for_pubkeys(pubkeys)
+        |> Enum.reject(&record_expired?(&1, now))
 
       if deletion_event_records == [] do
         %{event_id_rules: %{}, address_rules: %{}}
       else
         tags_by_deletion =
           deletion_event_records
-          |> Enum.map(fn {deletion_id, _deletion_pubkey, _deletion_created_at} ->
-            deletion_id
-          end)
+          |> Enum.map(& &1.event_id)
           |> fetch_deletion_tag_index()
 
         Enum.reduce(deletion_event_records, %{event_id_rules: %{}, address_rules: %{}}, fn
-          {deletion_id, deletion_pubkey, deletion_created_at}, scope ->
+          %EventRecord{
+            event_id: deletion_id,
+            pubkey: deletion_pubkey,
+            created_at: deletion_created_at
+          },
+          scope ->
             tags = Map.get(tags_by_deletion, deletion_id, %{})
             kind_filter = parse_kind_filter(Map.get(tags, "k", []))
 
@@ -304,10 +390,7 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   end
 
   defp deletion_events_for_pubkeys(pubkeys) do
-    from(d in EventRecord,
-      where: d.kind == 5 and d.pubkey in ^pubkeys,
-      select: {d.event_id, d.pubkey, d.created_at}
-    )
+    from(d in EventRecord, where: d.kind == 5 and d.pubkey in ^pubkeys)
     |> Repo.all()
   end
 

@@ -460,6 +460,85 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
     end
   end
 
+  # --- NIP-40 expiration filtering ---
+
+  describe "expiration filtering" do
+    test "hides expired events and keeps non-expired events" do
+      now = DateTime.utc_now()
+
+      expired_timestamp =
+        now
+        |> DateTime.add(-60, :second)
+        |> DateTime.to_unix()
+        |> Integer.to_string()
+
+      valid_timestamp =
+        now
+        |> DateTime.add(60, :second)
+        |> DateTime.to_unix()
+        |> Integer.to_string()
+
+      insert!(
+        kind: 1,
+        tags: [Tag.create(:expiration, expired_timestamp)],
+        created_at: DateTime.add(now, -120, :second)
+      )
+
+      valid =
+        insert!(
+          kind: 1,
+          tags: [Tag.create(:expiration, valid_timestamp)],
+          created_at: DateTime.add(now, -30, :second)
+        )
+
+      results = query!(%Filter{kinds: [1]})
+      assert event_ids(results) == [valid.id]
+    end
+
+    test "does not return expired events by ids" do
+      now = DateTime.utc_now()
+
+      expired_timestamp =
+        now
+        |> DateTime.add(-60, :second)
+        |> DateTime.to_unix()
+        |> Integer.to_string()
+
+      expired_event =
+        insert!(
+          kind: 1,
+          tags: [Tag.create(:expiration, expired_timestamp)],
+          created_at: DateTime.add(now, -120, :second)
+        )
+
+      assert {:ok, []} = QueryBuilder.query_events([%Filter{ids: [expired_event.id]}])
+    end
+
+    test "does not apply expired deletion events" do
+      target = insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:00:00Z])
+      now = DateTime.utc_now()
+
+      insert!(
+        kind: 5,
+        seckey: @seckey_a,
+        tags: [
+          Tag.create(:e, target.id),
+          Tag.create(
+            :expiration,
+            now
+            |> DateTime.add(-60, :second)
+            |> DateTime.to_unix()
+            |> Integer.to_string()
+          )
+        ],
+        created_at: ~U[2024-06-16 12:00:00Z]
+      )
+
+      results = query!(%Filter{kinds: [1]})
+      assert event_ids(results) == [target.id]
+    end
+  end
+
   # --- NIP-09 deletion filtering ---
 
   describe "deletion filtering" do
@@ -836,6 +915,37 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
                QueryBuilder.count_events([%Filter{kinds: [1]}, %Filter{kinds: [7]}])
     end
 
+    test "respects expiration filtering" do
+      now = DateTime.utc_now()
+
+      expired_timestamp =
+        now
+        |> DateTime.add(-60, :second)
+        |> DateTime.to_unix()
+        |> Integer.to_string()
+
+      valid_timestamp =
+        now
+        |> DateTime.add(60, :second)
+        |> DateTime.to_unix()
+        |> Integer.to_string()
+
+      insert!(
+        kind: 1,
+        tags: [Tag.create(:expiration, expired_timestamp)],
+        created_at: ~U[2024-06-15 12:00:00Z]
+      )
+
+      insert!(
+        kind: 1,
+        tags: [Tag.create(:expiration, valid_timestamp)],
+        created_at: ~U[2024-06-16 12:00:00Z],
+        seckey: @seckey_b
+      )
+
+      assert {:ok, 1} = QueryBuilder.count_events([%Filter{kinds: [1]}])
+    end
+
     test "tag filter does not overcount from JOIN expansion" do
       # Event with two matching tag values — should count as 1, not 2
       insert!(
@@ -968,6 +1078,24 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
         )
 
       refute QueryBuilder.event_matches_filters?(target.id, [%Filter{ids: [target.id]}])
+    end
+
+    test "returns false for expired event" do
+      now = DateTime.utc_now()
+
+      expired_timestamp =
+        now
+        |> DateTime.add(-60, :second)
+        |> DateTime.to_unix()
+        |> Integer.to_string()
+
+      target =
+        insert!(
+          kind: 1,
+          tags: [Tag.create(:expiration, expired_timestamp)]
+        )
+
+      refute QueryBuilder.event_matches_filters?(target.id, [%Filter{kinds: [1]}])
     end
 
     test "returns true for deletion events" do
