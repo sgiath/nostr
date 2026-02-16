@@ -15,8 +15,8 @@ defmodule Nostr.Relay.Pipeline.Engine do
   - `MessageValidator`
   - `EventValidator`
   - `RelayPolicyValidator`
-  - `MessageHandler`
   - `StorePolicy`
+  - `MessageHandler`
 
   Stage contract:
 
@@ -37,8 +37,8 @@ defmodule Nostr.Relay.Pipeline.Engine do
     Nostr.Relay.Pipeline.Stages.MessageValidator,
     Nostr.Relay.Pipeline.Stages.EventValidator,
     Nostr.Relay.Pipeline.Stages.RelayPolicyValidator,
-    Nostr.Relay.Pipeline.Stages.MessageHandler,
-    Nostr.Relay.Pipeline.Stages.StorePolicy
+    Nostr.Relay.Pipeline.Stages.StorePolicy,
+    Nostr.Relay.Pipeline.Stages.MessageHandler
   ]
 
   @spec run(binary(), ConnectionState.t(), keyword()) :: WebSock.handle_result()

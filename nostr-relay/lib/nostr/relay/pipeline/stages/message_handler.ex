@@ -22,6 +22,7 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
   alias Nostr.Relay.Pipeline.Context
   alias Nostr.Relay.Pipeline.Stage
   alias Nostr.Relay.Store
+  alias Nostr.Relay.Store.QueryBuilder
   alias Nostr.Relay.Web.ConnectionState
 
   @behaviour Stage
@@ -263,27 +264,44 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
   end
 
   defp route_event(%Event{} = event, %ConnectionState{} = state) do
+    route_event_store(event, state)
+  end
+
+  defp route_event_store(%Event{} = event, %ConnectionState{} = state) do
     event_opts = [scope: state.store_scope]
+    is_deleted = QueryBuilder.event_deleted?(event)
 
     case Store.insert_event(event, event_opts) do
       :ok ->
         Phoenix.PubSub.broadcast(Nostr.Relay.PubSub, "nostr:events", {:new_event, event})
 
-        {:push, [replacement_event_ack_frame(event, state.store_scope)], state}
+        {:push, [stored_event_ack_frame(event, is_deleted, state.store_scope)], state}
 
       :duplicate ->
-        ok_frame =
-          if replacement_event_stale?(event, state.store_scope) do
-            ok_frame(event.id, false, "rejected: stale replacement event")
-          else
-            ok_frame(event.id, true, "duplicate: already have this event")
-          end
+        ok_frame = duplicate_event_ack_frame(event, is_deleted, state.store_scope)
 
         {:push, [ok_frame], state}
 
       {:error, _reason} ->
         ok_frame = ok_frame(event.id, false, "error: could not store event")
         {:push, [ok_frame], state}
+    end
+  end
+
+  defp stored_event_ack_frame(%Event{} = event, true, _scope),
+    do: ok_frame(event.id, false, "rejected: event is deleted")
+
+  defp stored_event_ack_frame(%Event{} = event, false, scope),
+    do: replacement_event_ack_frame(event, scope)
+
+  defp duplicate_event_ack_frame(%Event{} = event, true, _scope),
+    do: ok_frame(event.id, false, "rejected: event is deleted")
+
+  defp duplicate_event_ack_frame(%Event{} = event, false, scope) do
+    if replacement_event_stale?(event, scope) do
+      ok_frame(event.id, false, "rejected: stale replacement event")
+    else
+      ok_frame(event.id, true, "duplicate: already have this event")
     end
   end
 

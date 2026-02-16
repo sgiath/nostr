@@ -14,6 +14,7 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
   alias Nostr.Relay.Web.ConnectionState
 
   @seckey "1111111111111111111111111111111111111111111111111111111111111111"
+  @seckey_b "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
   describe "Engine.run/3" do
     test "returns NOTICE for invalid JSON payloads" do
@@ -316,6 +317,276 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
                %ConnectionState{messages: 1}
              } = Engine.run("{}", state, stages: [__MODULE__.InvalidResultStage])
     end
+
+    test "rejects deletion events that target another pubkey via e-tag" do
+      state = ConnectionState.new()
+
+      target =
+        build_event(
+          kind: 1,
+          seckey: @seckey,
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      :ok = Store.insert_event(target, [])
+
+      deletion =
+        build_event(
+          kind: 5,
+          seckey: @seckey_b,
+          created_at: ~U[2024-06-16 12:00:00Z],
+          tags: [Tag.create(:e, target.id)]
+        )
+
+      payload = Message.create_event(deletion) |> Message.serialize()
+      deletion_id = deletion.id
+
+      assert {:push, [{:text, ok_json}], _state_after} = Engine.run(payload, state)
+
+      assert [
+               "OK",
+               ^deletion_id,
+               false,
+               "rejected: deletion can only target events by same pubkey"
+             ] = JSON.decode!(ok_json)
+
+      assert {:ok, target_visible} = Store.query_events([%Filter{ids: [target.id]}], [])
+      assert Enum.any?(target_visible, &(&1.id == target.id))
+
+      assert {:ok, []} = Store.query_events([%Filter{ids: [deletion.id]}], [])
+    end
+
+    test "accepts deletion events that target own events via e-tag" do
+      state = ConnectionState.new()
+
+      target =
+        build_event(
+          kind: 1,
+          seckey: @seckey,
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      :ok = Store.insert_event(target, [])
+
+      deletion =
+        build_event(
+          kind: 5,
+          seckey: @seckey,
+          created_at: ~U[2024-06-16 12:00:00Z],
+          tags: [Tag.create(:e, target.id)]
+        )
+
+      payload = Message.create_event(deletion) |> Message.serialize()
+      deletion_id = deletion.id
+
+      assert {:push, [{:text, ok_json}], _state_after} = Engine.run(payload, state)
+      assert ["OK", ^deletion_id, true, ""] = JSON.decode!(ok_json)
+
+      assert {:ok, []} = Store.query_events([%Filter{ids: [target.id]}], [])
+      assert {:ok, inserted} = Store.query_events([%Filter{ids: [deletion.id]}], [])
+      assert Enum.any?(inserted, &(&1.id == deletion.id))
+    end
+
+    test "rejects deletion events that target another pubkey via naddr" do
+      state = ConnectionState.new()
+
+      target =
+        build_event(
+          kind: 30_001,
+          seckey: @seckey,
+          created_at: ~U[2024-06-15 12:00:00Z],
+          tags: [Tag.create(:d, "post-1")]
+        )
+
+      :ok = Store.insert_event(target, [])
+
+      deletion =
+        build_event(
+          kind: 5,
+          seckey: @seckey_b,
+          created_at: ~U[2024-06-16 12:00:00Z],
+          tags: [Tag.create(:a, "30001:#{target.pubkey}:post-1"), Tag.create(:k, "30001")]
+        )
+
+      payload = Message.create_event(deletion) |> Message.serialize()
+      deletion_id = deletion.id
+
+      assert {:push, [{:text, ok_json}], _state_after} = Engine.run(payload, state)
+
+      assert [
+               "OK",
+               ^deletion_id,
+               false,
+               "rejected: deletion can only target events by same pubkey"
+             ] = JSON.decode!(ok_json)
+
+      assert {:ok, target_visible} = Store.query_events([%Filter{ids: [target.id]}], [])
+      assert Enum.any?(target_visible, &(&1.id == target.id))
+    end
+
+    test "rejects regular events already deleted in store but still stores them" do
+      state = ConnectionState.new()
+
+      target =
+        build_event(
+          kind: 1,
+          seckey: @seckey,
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      target_id = target.id
+
+      deletion =
+        build_event(
+          kind: 5,
+          seckey: @seckey,
+          created_at: ~U[2024-06-16 12:00:00Z],
+          tags: [Tag.create(:e, target.id)]
+        )
+
+      :ok = Store.insert_event(deletion, [])
+
+      payload = Message.create_event(target) |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ok_json}],
+               %ConnectionState{messages: 1} = state_after_target
+             } = Engine.run(payload, state)
+
+      assert ["OK", ^target_id, false, "rejected: event is deleted"] = JSON.decode!(ok_json)
+
+      assert Repo.aggregate(
+               from(record in EventRecord, where: record.event_id == ^target.id),
+               :count,
+               :event_id
+             ) == 1
+
+      assert Repo.aggregate(
+               from(record in EventRecord, where: record.event_id == ^deletion.id),
+               :count,
+               :event_id
+             ) == 1
+
+      assert {
+               :push,
+               [{:text, dup_ok_json}],
+               _state_after_duplicate
+             } = Engine.run(payload, state_after_target)
+
+      assert ["OK", ^target_id, false, "rejected: event is deleted"] = JSON.decode!(dup_ok_json)
+
+      assert Repo.aggregate(
+               from(record in EventRecord, where: record.event_id == ^target.id),
+               :count,
+               :event_id
+             ) == 1
+
+      assert {:ok, []} = Store.query_events([%Filter{ids: [target.id]}], [])
+    end
+
+    test "rejects regular events already deleted when deletion kind filter matches" do
+      state = ConnectionState.new()
+
+      target =
+        build_event(
+          kind: 1,
+          seckey: @seckey,
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      target_id = target.id
+
+      deletion =
+        build_event(
+          kind: 5,
+          seckey: @seckey,
+          created_at: ~U[2024-06-16 12:00:00Z],
+          tags: [Tag.create(:e, target.id), Tag.create(:k, "1")]
+        )
+
+      :ok = Store.insert_event(deletion, [])
+
+      payload = Message.create_event(target) |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ok_json}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(payload, state)
+
+      assert ["OK", ^target_id, false, "rejected: event is deleted"] = JSON.decode!(ok_json)
+    end
+
+    test "accepts regular events when deletion kind filter does not match" do
+      state = ConnectionState.new()
+
+      target =
+        build_event(
+          kind: 1,
+          seckey: @seckey,
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      target_id = target.id
+
+      deletion =
+        build_event(
+          kind: 5,
+          seckey: @seckey,
+          created_at: ~U[2024-06-16 12:00:00Z],
+          tags: [Tag.create(:e, target.id), Tag.create(:k, "7")]
+        )
+
+      :ok = Store.insert_event(deletion, [])
+
+      payload = Message.create_event(target) |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ok_json}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(payload, state)
+
+      assert ["OK", ^target_id, true, ""] = JSON.decode!(ok_json)
+    end
+
+    test "rejects regular parameterized replaceable events already deleted via naddr" do
+      state = ConnectionState.new()
+
+      target =
+        build_event(
+          kind: 30_001,
+          seckey: @seckey,
+          created_at: ~U[2024-06-15 12:00:00Z],
+          tags: [Tag.create(:d, "post-1")]
+        )
+
+      target_id = target.id
+
+      deletion =
+        build_event(
+          kind: 5,
+          seckey: @seckey,
+          created_at: ~U[2024-06-16 12:00:00Z],
+          tags: [
+            Tag.create(:a, "30001:#{target.pubkey}:post-1"),
+            Tag.create(:k, "30001")
+          ]
+        )
+
+      :ok = Store.insert_event(deletion, [])
+
+      payload = Message.create_event(target) |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ok_json}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(payload, state)
+
+      assert ["OK", ^target_id, false, "rejected: event is deleted"] = JSON.decode!(ok_json)
+    end
   end
 
   describe "AUTH end-to-end pipeline" do
@@ -475,11 +746,15 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
     created_at = Keyword.get(opts, :created_at, ~U[2024-01-01 00:00:00Z])
     kind = Keyword.get(opts, :kind, 1)
     seckey = Keyword.get(opts, :seckey, @seckey)
+    tags = Keyword.get(opts, :tags, [])
+    content = Keyword.get(opts, :content, "relay ack")
 
     kind
-    |> Event.create(content: "relay ack", created_at: created_at)
+    |> Event.create(content: content, created_at: created_at, tags: tags)
     |> Event.sign(seckey)
   end
+
+  defp build_event(opts) when is_list(opts), do: valid_event(opts)
 
   defp auth_event(opts) do
     challenge = Keyword.fetch!(opts, :challenge)

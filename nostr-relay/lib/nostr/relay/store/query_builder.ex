@@ -3,10 +3,12 @@ defmodule Nostr.Relay.Store.QueryBuilder do
 
   import Ecto.Query
 
+  alias Nostr.Event
   alias Nostr.Filter
   alias Nostr.Relay.Repo
   alias Nostr.Relay.Store.Event, as: EventRecord
   alias Nostr.Relay.Store.EventTag
+  alias Nostr.Tag
 
   # --- Public API ---
 
@@ -19,21 +21,55 @@ defmodule Nostr.Relay.Store.QueryBuilder do
       |> Enum.flat_map(&execute_single_filter/1)
       |> deduplicate_records()
       |> apply_replacement_collapse(filters)
+      |> apply_deletion_filter()
       |> sort_records(filters)
       |> apply_global_limit(filters)
 
     {:ok, results}
   end
 
+  @spec event_deleted?(Event.t()) :: boolean()
+  def event_deleted?(%Event{kind: 5}), do: false
+
+  def event_deleted?(%Event{
+        created_at: %DateTime{} = created_at,
+        id: event_id,
+        pubkey: event_pubkey,
+        kind: kind,
+        tags: tags
+      })
+      when is_binary(event_id) and is_binary(event_pubkey) and is_integer(kind) and is_list(tags) do
+    candidate =
+      %EventRecord{
+        event_id: event_id,
+        pubkey: event_pubkey,
+        kind: kind,
+        created_at: DateTime.to_unix(created_at)
+      }
+
+    deletion_data = deletion_scope([event_pubkey])
+    record_d_tags = %{event_id => event_d_tag(tags)}
+
+    event_is_hidden?(candidate, deletion_data, record_d_tags)
+  end
+
+  def event_deleted?(_event), do: false
+
   @spec event_matches_filters?(String.t(), [Filter.t()]) :: boolean()
   def event_matches_filters?(event_id, filters)
       when is_binary(event_id) and is_list(filters) do
     Enum.any?(filters, fn filter ->
-      filter
-      |> build_single_filter_query()
-      |> where([e], e.event_id == ^event_id)
-      |> limit(1)
-      |> Repo.exists?()
+      record =
+        filter
+        |> build_single_filter_query()
+        |> where([e], e.event_id == ^event_id)
+        |> limit(1)
+        |> Repo.one()
+
+      case record do
+        nil -> false
+        _record -> apply_deletion_filter([record]) != []
+      end
     end)
   end
 
@@ -48,6 +84,7 @@ defmodule Nostr.Relay.Store.QueryBuilder do
       |> Enum.flat_map(&execute_single_filter/1)
       |> deduplicate_records()
       |> apply_replacement_collapse(filters)
+      |> apply_deletion_filter()
       |> Enum.count()
 
     {:ok, count}
@@ -197,6 +234,259 @@ defmodule Nostr.Relay.Store.QueryBuilder do
         )
       )
     end
+  end
+
+  # --- deletion visibility (NIP-09 read-path suppression) ---
+
+  defp apply_deletion_filter(records) when is_list(records) do
+    visible_records =
+      records
+      |> Enum.reject(&deletion_event?/1)
+      |> apply_deletion_filter_to_records(records)
+
+    visible_records
+  end
+
+  defp apply_deletion_filter_to_records(records, all_records) do
+    if records == [] do
+      all_records
+    else
+      data = deletion_scope(fetch_relevant_pubkeys(records))
+      candidate_d_tags = fetch_record_d_tags(records)
+
+      Enum.filter(all_records, fn record ->
+        !event_is_hidden?(record, data, candidate_d_tags)
+      end)
+    end
+  end
+
+  defp deletion_event?(%EventRecord{kind: 5}), do: true
+  defp deletion_event?(_event), do: false
+
+  defp fetch_relevant_pubkeys(records) do
+    records
+    |> Enum.map(& &1.pubkey)
+    |> Enum.uniq()
+  end
+
+  defp deletion_scope(pubkeys) do
+    if pubkeys == [] do
+      %{event_id_rules: %{}, address_rules: %{}}
+    else
+      deletion_event_records = deletion_events_for_pubkeys(pubkeys)
+
+      if deletion_event_records == [] do
+        %{event_id_rules: %{}, address_rules: %{}}
+      else
+        tags_by_deletion =
+          deletion_event_records
+          |> Enum.map(fn {deletion_id, _deletion_pubkey, _deletion_created_at} ->
+            deletion_id
+          end)
+          |> fetch_deletion_tag_index()
+
+        Enum.reduce(deletion_event_records, %{event_id_rules: %{}, address_rules: %{}}, fn
+          {deletion_id, deletion_pubkey, deletion_created_at}, scope ->
+            tags = Map.get(tags_by_deletion, deletion_id, %{})
+            kind_filter = parse_kind_filter(Map.get(tags, "k", []))
+
+            scope
+            |> add_event_id_deletions(deletion_pubkey, Map.get(tags, "e", []), kind_filter)
+            |> add_address_deletions(
+              deletion_pubkey,
+              Map.get(tags, "a", []),
+              kind_filter,
+              deletion_created_at
+            )
+        end)
+      end
+    end
+  end
+
+  defp deletion_events_for_pubkeys(pubkeys) do
+    from(d in EventRecord,
+      where: d.kind == 5 and d.pubkey in ^pubkeys,
+      select: {d.event_id, d.pubkey, d.created_at}
+    )
+    |> Repo.all()
+  end
+
+  defp fetch_deletion_tag_index(deletion_event_ids) when deletion_event_ids == [] do
+    %{}
+  end
+
+  defp fetch_deletion_tag_index(deletion_event_ids) do
+    from(t in EventTag,
+      where: t.event_id in ^deletion_event_ids,
+      select: {t.event_id, t.tag_name, t.tag_value}
+    )
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn {event_id, tag_name, tag_value}, grouped ->
+      by_event = Map.get(grouped, event_id, %{})
+      values = Map.get(by_event, tag_name, [])
+
+      Map.put(grouped, event_id, Map.put(by_event, tag_name, [tag_value | values]))
+    end)
+  end
+
+  defp add_event_id_deletions(scope, _publisher, tag_values, _kind_filter)
+       when tag_values == [] do
+    scope
+  end
+
+  defp add_event_id_deletions(scope, publisher, tag_values, kind_filter)
+       when is_list(tag_values) do
+    Enum.reduce(tag_values, scope, fn
+      event_id, acc when is_binary(event_id) and byte_size(event_id) == 64 ->
+        existing = Map.get(acc.event_id_rules, {publisher, event_id}, [])
+        updated = Map.put(acc.event_id_rules, {publisher, event_id}, [kind_filter | existing])
+
+        %{acc | event_id_rules: updated}
+
+      _value, acc ->
+        acc
+    end)
+  end
+
+  defp add_event_id_deletions(scope, _publisher, _tag_values, _kind_filter) do
+    scope
+  end
+
+  defp add_address_deletions(scope, _publisher, tag_values, _kind_filter, _deletion_created_at)
+       when tag_values == [] do
+    scope
+  end
+
+  defp add_address_deletions(
+         scope,
+         deletion_pubkey,
+         tag_values,
+         kind_filter,
+         deletion_created_at
+       )
+       when is_list(tag_values) do
+    Enum.reduce(tag_values, scope, fn value, acc ->
+      case parse_address_coord(value, deletion_pubkey) do
+        {:ok, coordinate} ->
+          key = coordinate
+          existing = Map.get(acc.address_rules, key, [])
+
+          updated =
+            Map.put(acc.address_rules, key, [{deletion_created_at, kind_filter} | existing])
+
+          %{acc | address_rules: updated}
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp add_address_deletions(scope, _publisher, _tag_values, _kind_filter, _deletion_created_at) do
+    scope
+  end
+
+  # Coordinate format: kind:pubkey:d-tag
+  defp parse_address_coord(value, deletion_pubkey) when is_binary(value) do
+    case String.split(value, ":", parts: 3) do
+      [kind_value, pubkey, d_tag] ->
+        case parse_kind_integer(kind_value) do
+          kind when is_integer(kind) ->
+            if pubkey == deletion_pubkey do
+              {:ok, {deletion_pubkey, kind, d_tag}}
+            else
+              {:ignore, :invalid}
+            end
+
+          _ ->
+            {:ignore, :invalid}
+        end
+
+      _ ->
+        {:ignore, :invalid}
+    end
+  end
+
+  defp parse_address_coord(_value, _deletion_pubkey), do: {:ignore, :invalid}
+
+  defp parse_kind_filter(values) when is_list(values) do
+    parsed_kinds =
+      values
+      |> Enum.map(&parse_kind_integer/1)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    if parsed_kinds == [] do
+      nil
+    else
+      MapSet.new(parsed_kinds)
+    end
+  end
+
+  defp parse_kind_filter(_values), do: nil
+
+  defp parse_kind_integer(value) when is_integer(value) and value >= 0 do
+    value
+  end
+
+  defp parse_kind_integer(value) when is_binary(value) do
+    value = String.trim(value)
+
+    case Integer.parse(value) do
+      {kind, ""} when kind >= 0 -> kind
+      _ -> nil
+    end
+  end
+
+  defp parse_kind_integer(_value), do: nil
+
+  defp event_is_hidden?(%EventRecord{} = event, deletion_scope, record_d_tags) do
+    case event.kind do
+      5 ->
+        false
+
+      _ ->
+        event_id_rules =
+          Map.get(deletion_scope.event_id_rules, {event.pubkey, event.event_id}, [])
+
+        address_d_tag = Map.get(record_d_tags, event.event_id, "")
+
+        address_rules =
+          Map.get(deletion_scope.address_rules, {event.pubkey, event.kind, address_d_tag}, [])
+
+        deleted_by_event_id?(event.kind, event_id_rules) ||
+          deleted_by_address?(event.created_at, event.kind, address_rules)
+    end
+  end
+
+  defp deleted_by_event_id?(kind, kind_rules) do
+    Enum.any?(kind_rules, &kind_filter_allows?(&1, kind))
+  end
+
+  defp deleted_by_address?(created_at, event_kind, address_rules) do
+    Enum.any?(address_rules, fn {deletion_created_at, kind_rules} ->
+      created_at <= deletion_created_at and kind_filter_allows?(kind_rules, event_kind)
+    end)
+  end
+
+  defp event_d_tag(tags) when is_list(tags) do
+    tags
+    |> Enum.find_value(fn
+      %Tag{type: :d, data: data} when is_binary(data) -> data
+      _ -> nil
+    end)
+    |> Kernel.||("")
+  end
+
+  defp event_d_tag(_tags), do: ""
+
+  defp kind_filter_allows?(nil, _kind), do: true
+  defp kind_filter_allows?(kind_set, kind), do: kind in kind_set
+
+  defp fetch_record_d_tags(records) do
+    records
+    |> Enum.map(& &1.event_id)
+    |> fetch_d_tags()
   end
 
   # --- ordering ---

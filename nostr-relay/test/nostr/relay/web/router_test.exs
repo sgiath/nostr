@@ -48,7 +48,7 @@ defmodule Nostr.Relay.Web.RouterTest do
         |> JSON.decode!()
 
       assert info["name"] == "Nostr Relay"
-      assert info["supported_nips"] == [1, 11, 42, 45, 50]
+      assert info["supported_nips"] == [1, 9, 11, 42, 45, 50]
       assert info["software"] == "nostr_relay"
       assert is_map(info["limits"])
     end

@@ -160,6 +160,288 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       assert routed_state.store_scope == scope
     end
 
+    test "hides events deleted by NIP-09 kind-5 references", %{state: state, scope: scope} do
+      kept =
+        valid_event(
+          created_at: ~U[2024-01-02 00:00:00Z],
+          created_by: @author_one,
+          kind: 1,
+          tags: [Tag.create(:e, "other")]
+        )
+
+      deleted_target =
+        valid_event(
+          created_at: ~U[2024-01-01 00:00:00Z],
+          created_by: @author_one,
+          kind: 1
+        )
+
+      deletion =
+        valid_event(
+          created_at: ~U[2024-01-03 00:00:00Z],
+          created_by: @author_one,
+          kind: 5,
+          tags: [Tag.create(:e, deleted_target.id)]
+        )
+
+      :ok = Store.insert_event(kept, scope: scope)
+      :ok = Store.insert_event(deletion, scope: scope)
+
+      request =
+        %Filter{kinds: [1]}
+        |> Message.request("sub-delete-read")
+        |> Message.serialize()
+
+      expected_events = [
+        event_frame(kept, "sub-delete-read"),
+        eose_frame("sub-delete-read")
+      ]
+
+      assert {
+               :push,
+               ^expected_events,
+               routed_state
+             } = MessageRouter.route_frame(request, state)
+
+      assert routed_state.messages == 1
+      assert routed_state.store_scope == scope
+    end
+
+    test "rejects regular events already deleted by kind-5 references", %{
+      state: state,
+      scope: scope
+    } do
+      deleted_target =
+        valid_event(
+          created_at: ~U[2024-01-01 00:00:00Z],
+          created_by: @author_one,
+          kind: 1
+        )
+
+      deletion =
+        valid_event(
+          created_at: ~U[2024-01-03 00:00:00Z],
+          created_by: @author_one,
+          kind: 5,
+          tags: [Tag.create(:e, deleted_target.id)]
+        )
+
+      :ok = Store.insert_event(deletion, scope: scope)
+
+      payload = Message.create_event(deleted_target) |> Message.serialize()
+
+      expected_ok =
+        Message.ok(deleted_target.id, false, "rejected: event is deleted")
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_ok}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+    end
+
+    test "rejects regular events already deleted by kind filters", %{
+      state: state,
+      scope: scope
+    } do
+      deleted_target =
+        valid_event(
+          created_at: ~U[2024-01-01 00:00:00Z],
+          created_by: @author_one,
+          kind: 1
+        )
+
+      deletion =
+        valid_event(
+          created_at: ~U[2024-01-03 00:00:00Z],
+          created_by: @author_one,
+          kind: 5,
+          tags: [Tag.create(:e, deleted_target.id), Tag.create(:k, "1")]
+        )
+
+      :ok = Store.insert_event(deletion, scope: scope)
+
+      payload = Message.create_event(deleted_target) |> Message.serialize()
+
+      expected_ok =
+        Message.ok(deleted_target.id, false, "rejected: event is deleted")
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_ok}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+    end
+
+    test "accepts regular events when deletion kind filter does not match", %{
+      state: state,
+      scope: scope
+    } do
+      deleted_target =
+        valid_event(
+          created_at: ~U[2024-01-01 00:00:00Z],
+          created_by: @author_one,
+          kind: 1
+        )
+
+      deletion =
+        valid_event(
+          created_at: ~U[2024-01-03 00:00:00Z],
+          created_by: @author_one,
+          kind: 5,
+          tags: [Tag.create(:e, deleted_target.id), Tag.create(:k, "7")]
+        )
+
+      :ok = Store.insert_event(deletion, scope: scope)
+
+      payload = Message.create_event(deleted_target) |> Message.serialize()
+
+      expected_ok = Message.ok(deleted_target.id, true, "") |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_ok}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+    end
+
+    test "rejects parameterized replaceable events already deleted by naddr", %{
+      state: state,
+      scope: scope
+    } do
+      deleted_target =
+        valid_event(
+          created_at: ~U[2024-01-01 00:00:00Z],
+          created_by: @author_one,
+          kind: 30_001,
+          tags: [Tag.create(:d, "post-1")]
+        )
+
+      deletion =
+        valid_event(
+          created_at: ~U[2024-01-03 00:00:00Z],
+          created_by: @author_one,
+          kind: 5,
+          tags: [
+            Tag.create(:a, "30001:#{deleted_target.pubkey}:post-1"),
+            Tag.create(:k, "30001")
+          ]
+        )
+
+      :ok = Store.insert_event(deletion, scope: scope)
+
+      payload = Message.create_event(deleted_target) |> Message.serialize()
+
+      expected_ok =
+        Message.ok(deleted_target.id, false, "rejected: event is deleted")
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_ok}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+    end
+
+    test "accepts kind-5 deletion from same pubkey on write", %{state: state, scope: scope} do
+      deleted_target =
+        valid_event(
+          created_at: ~U[2024-01-01 00:00:00Z],
+          created_by: @author_one,
+          kind: 1
+        )
+
+      deletion =
+        5
+        |> Event.create(
+          tags: [Tag.create(:e, deleted_target.id)],
+          created_at: ~U[2024-01-03 00:00:00Z]
+        )
+        |> Event.sign(@author_one)
+
+      :ok = Store.insert_event(deleted_target, scope: scope)
+
+      payload = Message.create_event(deletion) |> Message.serialize()
+
+      expected_ok = Message.ok(deletion.id, true, "") |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_ok}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+
+      assert {:ok, [stored]} = Store.query_events([%Filter{ids: [deletion.id]}], scope: scope)
+      assert stored.id == deletion.id
+    end
+
+    test "rejects kind-5 deletion from different pubkey via e-tag", %{state: state, scope: scope} do
+      deleted_target =
+        valid_event(
+          created_at: ~U[2024-01-01 00:00:00Z],
+          created_by: @author_two,
+          kind: 1
+        )
+
+      deletion =
+        5
+        |> Event.create(
+          tags: [Tag.create(:e, deleted_target.id)],
+          created_at: ~U[2024-01-03 00:00:00Z]
+        )
+        |> Event.sign(@author_one)
+
+      :ok = Store.insert_event(deleted_target, scope: scope)
+
+      payload = Message.create_event(deletion) |> Message.serialize()
+
+      expected_ok =
+        Message.ok(
+          deletion.id,
+          false,
+          "rejected: deletion can only target events by same pubkey"
+        )
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_ok}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+
+      assert {:ok, []} = Store.query_events([%Filter{ids: [deletion.id]}], scope: scope)
+    end
+
+    test "rejects kind-5 deletion when address pubkey mismatches", %{state: state, scope: scope} do
+      deletion =
+        5
+        |> Event.create(
+          tags: [Tag.create(:a, "1:#{@author_two}:address")],
+          created_at: ~U[2024-01-03 00:00:00Z]
+        )
+        |> Event.sign(@author_one)
+
+      payload = Message.create_event(deletion) |> Message.serialize()
+
+      expected_ok =
+        Message.ok(
+          deletion.id,
+          false,
+          "rejected: deletion can only target events by same pubkey"
+        )
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_ok}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+
+      assert {:ok, []} = Store.query_events([%Filter{ids: [deletion.id]}], scope: scope)
+    end
+
     test "dispatches EVENT OK without inline fan-out (fan-out via PubSub)", %{state: state} do
       filter = %Filter{kinds: [1]}
 

@@ -15,7 +15,6 @@ defmodule Nostr.Relay.Store do
   @spec insert_event(Event.t(), keyword()) :: Nostr.Relay.Store.Behavior.insert_result()
   def insert_event(%Event{} = event, opts) when is_list(opts) do
     raw_json = Keyword.get(opts, :raw_json, JSON.encode!(event))
-
     insert_event_with_tags(event, raw_json)
   rescue
     error -> {:error, error}

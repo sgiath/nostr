@@ -143,7 +143,7 @@ defmodule Nostr.Relay.ConfigTest do
       # These are compile-time only and must not change
       assert Keyword.get(info, :software) == "nostr_relay"
       assert Keyword.get(info, :version) == "0.1.0"
-      assert Keyword.get(info, :supported_nips) == [1, 11, 42, 45, 50]
+      assert Keyword.get(info, :supported_nips) == [1, 9, 11, 42, 45, 50]
     end
 
     test "merges database path with expansion" do

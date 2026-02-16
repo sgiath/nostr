@@ -460,6 +460,201 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
     end
   end
 
+  # --- NIP-09 deletion filtering ---
+
+  describe "deletion filtering" do
+    test "hides events referenced by kind 5 e-tag from same publisher" do
+      target = insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:00:00Z])
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:e, target.id)],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      results = query!(%Filter{kinds: [1]})
+      assert results == []
+    end
+
+    test "does not hide events by deletions from different publisher" do
+      target = insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:00:00Z])
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_b,
+          tags: [Tag.create(:e, target.id)],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      results = query!(%Filter{kinds: [1]})
+      assert event_ids(results) == [target.id]
+    end
+
+    test "hides events deleted at exact created_at boundary" do
+      target =
+        insert!(
+          kind: 1,
+          seckey: @seckey_a,
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      insert!(
+        kind: 5,
+        seckey: @seckey_a,
+        tags: [Tag.create(:e, target.id)],
+        created_at: ~U[2024-06-15 12:00:00Z]
+      )
+
+      results = query!(%Filter{kinds: [1]})
+      assert results == []
+    end
+
+    test "respects kind filters in deletion tag list" do
+      target = insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:00:00Z])
+      untouched = insert!(kind: 7, seckey: @seckey_a, created_at: ~U[2024-06-15 13:00:00Z])
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:e, target.id), Tag.create(:k, "1")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      results = query!(%Filter{kinds: [1, 7]})
+      assert event_ids(results) == [untouched.id]
+    end
+
+    test "does not hide parameterized replaceable events by naddr if publisher differs" do
+      target =
+        insert!(
+          kind: 30_001,
+          seckey: @seckey_a,
+          tags: [Tag.create(:d, "post-1")],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_b,
+          tags: [
+            Tag.create(:a, "30001:#{target.pubkey}:post-1"),
+            Tag.create(:k, "30001")
+          ],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      results = query!(%Filter{kinds: [30_001]})
+      assert event_ids(results) == [target.id]
+    end
+
+    test "keeps event visible when only malformed delete tags are provided" do
+      target =
+        insert!(
+          kind: 30_001,
+          seckey: @seckey_a,
+          tags: [Tag.create(:d, "post-1")],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      insert!(
+        kind: 5,
+        seckey: @seckey_a,
+        tags: [
+          Tag.create(:a, "bad-coordinate"),
+          Tag.create(:a, "30001:not-the-pubkey:post-1"),
+          Tag.create(:k, "nonnumeric")
+        ],
+        created_at: ~U[2024-06-16 12:00:00Z]
+      )
+
+      results = query!(%Filter{kinds: [30_001]})
+      assert event_ids(results) == [target.id]
+    end
+
+    test "hides parameterized replaceable events by naddr and same publisher" do
+      target =
+        insert!(
+          kind: 30_001,
+          seckey: @seckey_a,
+          tags: [Tag.create(:d, "post-1")],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      untouched =
+        insert!(
+          kind: 30_001,
+          seckey: @seckey_a,
+          tags: [Tag.create(:d, "post-2")],
+          created_at: ~U[2024-06-15 13:00:00Z]
+        )
+
+      a_tag = "30001:#{target.pubkey}:post-1"
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:a, a_tag), Tag.create(:k, "30001")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      results = query!(%Filter{kinds: [30_001]})
+      assert event_ids(results) == [untouched.id]
+    end
+
+    test "does not hide events deleted before they were created for naddr scope" do
+      target =
+        insert!(
+          kind: 30_001,
+          seckey: @seckey_a,
+          tags: [Tag.create(:d, "post-1")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:a, "30001:#{target.pubkey}:post-1"), Tag.create(:k, "30001")],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      results = query!(%Filter{kinds: [30_001]})
+      assert event_ids(results) == [target.id]
+    end
+
+    test "keeps deletion events visible in queries" do
+      deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      results = query!(%Filter{kinds: [5]})
+      assert event_ids(results) == [deletion.id]
+    end
+
+    test "hides deleted events when queried by ids" do
+      target =
+        insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:00:00Z])
+
+      insert!(
+        kind: 5,
+        seckey: @seckey_a,
+        tags: [Tag.create(:e, target.id)],
+        created_at: ~U[2024-06-16 12:00:00Z]
+      )
+
+      assert {:ok, []} = QueryBuilder.query_events([%Filter{ids: [target.id]}])
+    end
+  end
+
   # --- search filter (NIP-50) ---
 
   describe "search filter" do
@@ -662,6 +857,39 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
                  %Filter{since: ~U[2024-06-15 00:00:00Z], until: ~U[2024-06-15 23:59:59Z]}
                ])
     end
+
+    test "respects deletion filters" do
+      retained = insert!(kind: 1, seckey: @seckey_b, created_at: ~U[2024-06-15 12:00:00Z])
+      deleted = insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:30:00Z])
+
+      insert!(
+        kind: 5,
+        seckey: @seckey_a,
+        tags: [Tag.create(:e, deleted.id)],
+        created_at: ~U[2024-06-16 12:00:00Z]
+      )
+
+      assert {:ok, 1} = QueryBuilder.count_events([%Filter{kinds: [1]}])
+      assert event_ids(query!(%Filter{kinds: [1]})) == [retained.id]
+    end
+
+    test "respects deletion filters for ids queries" do
+      retained =
+        insert!(kind: 1, seckey: @seckey_b, created_at: ~U[2024-06-15 12:00:00Z])
+
+      deleted =
+        insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:30:00Z])
+
+      insert!(
+        kind: 5,
+        seckey: @seckey_a,
+        tags: [Tag.create(:e, deleted.id)],
+        created_at: ~U[2024-06-16 12:00:00Z]
+      )
+
+      assert {:ok, 0} = QueryBuilder.count_events([%Filter{ids: [deleted.id]}])
+      assert {:ok, 1} = QueryBuilder.count_events([%Filter{ids: [retained.id, deleted.id]}])
+    end
   end
 
   # --- event_matches_filters? ---
@@ -691,6 +919,142 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
                %Filter{kinds: [7]},
                %Filter{kinds: [1]}
              ])
+    end
+
+    test "returns false for event hidden by deletion filtering" do
+      target = insert!(kind: 1, seckey: @seckey_a)
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:e, target.id)],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      refute QueryBuilder.event_matches_filters?(target.id, [%Filter{kinds: [1]}])
+    end
+
+    test "returns false for event hidden by naddr deletion filtering" do
+      target =
+        insert!(
+          kind: 30_001,
+          seckey: @seckey_a,
+          tags: [Tag.create(:d, "post-1")],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:a, "30001:#{target.pubkey}:post-1"), Tag.create(:k, "30001")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      refute QueryBuilder.event_matches_filters?(target.id, [%Filter{kinds: [30_001]}])
+    end
+
+    test "returns false for ids-only query when event is deleted" do
+      target =
+        insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:00:00Z])
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:e, target.id)],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      refute QueryBuilder.event_matches_filters?(target.id, [%Filter{ids: [target.id]}])
+    end
+
+    test "returns true for deletion events" do
+      deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:e, "not-used")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      assert QueryBuilder.event_matches_filters?(deletion.id, [%Filter{kinds: [5]}])
+    end
+  end
+
+  describe "event_deleted?/1" do
+    test "returns false for deletion events" do
+      deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:e, "not-used")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      refute QueryBuilder.event_deleted?(deletion)
+    end
+
+    test "returns true when kind-specific deletion exists" do
+      target =
+        insert!(
+          kind: 1,
+          seckey: @seckey_a,
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:e, target.id), Tag.create(:k, "1")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      assert QueryBuilder.event_deleted?(target)
+    end
+
+    test "returns false when kind-specific deletion does not match" do
+      target =
+        insert!(
+          kind: 1,
+          seckey: @seckey_a,
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [Tag.create(:e, target.id), Tag.create(:k, "7")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      refute QueryBuilder.event_deleted?(target)
+    end
+
+    test "returns true for deleted parameterized event by naddr" do
+      target =
+        insert!(
+          kind: 30_001,
+          seckey: @seckey_a,
+          tags: [Tag.create(:d, "post-1")],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      _deletion =
+        insert!(
+          kind: 5,
+          seckey: @seckey_a,
+          tags: [
+            Tag.create(:a, "30001:#{target.pubkey}:post-1"),
+            Tag.create(:k, "30001")
+          ],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      assert QueryBuilder.event_deleted?(target)
     end
   end
 end
