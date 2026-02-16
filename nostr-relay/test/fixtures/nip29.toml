@@ -1,0 +1,9 @@
+[nip29]
+enabled = true
+allow_unmanaged_groups = false
+
+[nip29.optional_checks]
+enforce_group_id_charset = true
+
+[nip29.roles]
+admin = ["put_user", "remove_user"]

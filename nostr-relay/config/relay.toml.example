@@ -7,6 +7,8 @@
 name = "My Nostr Relay"
 description = "A personal relay."
 # pubkey = "hex-encoded-32-byte-pubkey"
+# self_pub = "hex-encoded-32-byte-relay-pubkey"
+# self_sec = "hex-encoded-32-byte-relay-seckey"
 # contact = "mailto:admin@example.com"
 # url = "wss://relay.example.com"          # used for NIP-42 relay tag validation
 
@@ -40,3 +42,30 @@ min_prefix_length = 4
 # timeout_seconds = 30
 # whitelist = ["hex-pubkey-1", "hex-pubkey-2"]
 # denylist  = ["hex-pubkey-3"]
+
+# NIP-29 Relay-based Groups
+# Disabled by default. When enabled, the relay enforces group write/read policy
+# and may generate relay-signed group state events.
+
+[nip29]
+# enabled = false
+# allow_unmanaged_groups = true
+# publish_group_members = false
+# publish_group_roles = true
+
+[nip29.optional_checks]
+# enforce_group_id_charset = false
+# enforce_previous_refs = false
+# min_previous_refs = 0
+# enforce_previous_known_events = false
+# enforce_late_publication = false
+# max_event_age_seconds = 86400
+# require_invite_for_closed_groups = false
+
+[nip29.joins]
+# auto_accept = false
+# allow_pending = true
+
+[nip29.roles]
+# admin = ["put_user", "remove_user", "edit_metadata", "delete_event", "create_invite", "delete_group"]
+# moderator = ["delete_event"]

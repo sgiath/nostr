@@ -11,9 +11,19 @@ defmodule Nostr.Relay.Config do
 
   require Logger
 
-  @relay_keys [:name, :description, :pubkey, :contact, :url]
+  @relay_info_keys [:name, :description, :pubkey, :contact, :url]
+  @relay_identity_keys [:self_pub, :self_sec]
   @limit_keys [:max_subscriptions, :max_filters, :max_limit, :min_prefix_length]
   @auth_keys [:required, :mode, :timeout_seconds, :whitelist, :denylist]
+  @nip29_keys [
+    :enabled,
+    :allow_unmanaged_groups,
+    :publish_group_members,
+    :publish_group_roles,
+    :optional_checks,
+    :joins,
+    :roles
+  ]
 
   @spec load!() :: :ok
   def load! do
@@ -47,10 +57,12 @@ defmodule Nostr.Relay.Config do
     case Toml.decode_file(path, keys: :atoms) do
       {:ok, toml} ->
         merge_relay_info(toml)
+        merge_relay_identity(toml)
         merge_server(toml)
         merge_database(toml)
         merge_limits(toml)
         merge_auth(toml)
+        merge_nip29(toml)
         :ok
 
       {:error, reason} ->
@@ -64,13 +76,26 @@ defmodule Nostr.Relay.Config do
 
     overrides =
       relay
-      |> Map.take(@relay_keys)
+      |> Map.take(@relay_info_keys)
       |> Enum.to_list()
 
     Application.put_env(:nostr_relay, :relay_info, Keyword.merge(current, overrides))
   end
 
   defp merge_relay_info(_toml), do: :ok
+
+  defp merge_relay_identity(%{relay: relay}) when is_map(relay) do
+    current = Application.get_env(:nostr_relay, :relay_identity, [])
+
+    overrides =
+      relay
+      |> Map.take(@relay_identity_keys)
+      |> Enum.to_list()
+
+    Application.put_env(:nostr_relay, :relay_identity, Keyword.merge(current, overrides))
+  end
+
+  defp merge_relay_identity(_toml), do: :ok
 
   defp merge_server(%{server: server}) when is_map(server) do
     current = Application.get_env(:nostr_relay, :server, [])
@@ -139,6 +164,76 @@ defmodule Nostr.Relay.Config do
   end
 
   defp merge_auth(_toml), do: :ok
+
+  defp merge_nip29(%{nip29: nip29}) when is_map(nip29) do
+    current = Application.get_env(:nostr_relay, :nip29, [])
+
+    overrides =
+      nip29
+      |> Map.take(@nip29_keys)
+      |> normalize_nip29_maps()
+      |> Enum.to_list()
+
+    Application.put_env(:nostr_relay, :nip29, Keyword.merge(current, overrides))
+  end
+
+  defp merge_nip29(_toml), do: :ok
+
+  defp normalize_nip29_maps(nip29) do
+    nip29
+    |> normalize_optional_checks()
+    |> normalize_joins()
+    |> normalize_roles()
+  end
+
+  defp normalize_optional_checks(%{optional_checks: value} = nip29) when is_map(value) do
+    Map.put(nip29, :optional_checks, value)
+  end
+
+  defp normalize_optional_checks(nip29), do: nip29
+
+  defp normalize_joins(%{joins: value} = nip29) when is_map(value) do
+    Map.put(nip29, :joins, value)
+  end
+
+  defp normalize_joins(nip29), do: nip29
+
+  defp normalize_roles(%{roles: value} = nip29) when is_map(value) do
+    roles =
+      value
+      |> Enum.map(fn {key, capabilities} ->
+        {to_string(key), normalize_capabilities(capabilities)}
+      end)
+      |> Map.new()
+
+    Map.put(nip29, :roles, roles)
+  end
+
+  defp normalize_roles(nip29), do: nip29
+
+  defp normalize_capabilities(capabilities) when is_list(capabilities) do
+    Enum.map(capabilities, &normalize_capability/1)
+  end
+
+  defp normalize_capabilities(_capabilities), do: []
+
+  defp normalize_capability(capability) when is_atom(capability), do: capability
+
+  defp normalize_capability(capability) when is_binary(capability) do
+    case String.trim(capability) do
+      "put_user" -> :put_user
+      "remove_user" -> :remove_user
+      "edit_metadata" -> :edit_metadata
+      "delete_event" -> :delete_event
+      "create_invite" -> :create_invite
+      "delete_group" -> :delete_group
+      "create_group" -> :create_group
+      "moderate" -> :moderate
+      _ -> :unknown
+    end
+  end
+
+  defp normalize_capability(_capability), do: :unknown
 
   defp normalize_auth_mode(%{mode: mode} = auth) when is_binary(mode) do
     Map.put(auth, :mode, String.to_existing_atom(mode))

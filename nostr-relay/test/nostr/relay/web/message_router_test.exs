@@ -11,6 +11,8 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
   alias Nostr.Relay.Web.MessageRouter
   alias Nostr.Tag
 
+  @seckey "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
   @author_one "1111111111111111111111111111111111111111111111111111111111111111"
   @author_two "2222222222222222222222222222222222222222222222222222222222222222"
 
@@ -160,6 +162,69 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       assert routed_state.store_scope == scope
     end
 
+    test "collapses kind 41 channel metadata by root on REQ", %{state: state, scope: scope} do
+      root_id = String.duplicate("a", 64)
+
+      older =
+        channel_metadata_event(
+          root_id: root_id,
+          created_at: ~U[2024-01-01 00:00:00Z],
+          tags: [
+            Tag.create(:e, String.duplicate("b", 64)),
+            Tag.create(:e, root_id, ["wss://relay", "root"])
+          ]
+        )
+
+      newer =
+        channel_metadata_event(
+          root_id: root_id,
+          created_at: ~U[2024-01-02 00:00:00Z]
+        )
+
+      :ok = Store.insert_event(older, scope: scope)
+      :ok = Store.insert_event(newer, scope: scope)
+
+      request =
+        %Filter{kinds: [41]}
+        |> Message.request("sub-kind41")
+        |> Message.serialize()
+
+      expected_frames = [
+        event_frame(newer, "sub-kind41"),
+        eose_frame("sub-kind41")
+      ]
+
+      assert {
+               :push,
+               ^expected_frames,
+               routed_state
+             } = MessageRouter.route_frame(request, state)
+
+      assert routed_state.store_scope == scope
+    end
+
+    test "collapses kind 41 channel metadata by root on COUNT", %{state: state, scope: scope} do
+      root_id = String.duplicate("f", 64)
+
+      older = channel_metadata_event(root_id: root_id, created_at: ~U[2024-01-01 00:00:00Z])
+      newer = channel_metadata_event(root_id: root_id, created_at: ~U[2024-01-02 00:00:00Z])
+
+      :ok = Store.insert_event(older, scope: scope)
+      :ok = Store.insert_event(newer, scope: scope)
+
+      request =
+        Message.count(%Filter{kinds: [41]}, "count-kind41")
+        |> Message.serialize()
+
+      expected_count = Message.count(1, "count-kind41") |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_count}],
+               _routed_state
+             } = MessageRouter.route_frame(request, state)
+    end
+
     test "hides events deleted by NIP-09 kind-5 references", %{state: state, scope: scope} do
       kept =
         valid_event(
@@ -205,6 +270,412 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
 
       assert routed_state.messages == 1
       assert routed_state.store_scope == scope
+    end
+
+    test "hides kind 1059 gift-wraps from unauthenticated REQ readers", %{
+      state: state,
+      scope: scope
+    } do
+      gift_for_author_one = gift_wrap_event(recipient: @author_one)
+      :ok = Store.insert_event(gift_for_author_one, scope: scope)
+
+      request =
+        %Filter{kinds: [10_59]}
+        |> Message.request("sub-gift-wrap-no-auth")
+        |> Message.serialize()
+
+      expected_eose = eose_frame("sub-gift-wrap-no-auth")
+
+      assert {
+               :push,
+               [^expected_eose],
+               routed_state
+             } = MessageRouter.route_frame(request, state)
+
+      assert routed_state.store_scope == scope
+    end
+
+    test "returns only matching recipient gift-wraps for authenticated REQ readers", %{
+      state: state,
+      scope: scope
+    } do
+      gift_for_author_one = gift_wrap_event(recipient: @author_one)
+      gift_for_author_two = gift_wrap_event(recipient: @author_two)
+
+      :ok = Store.insert_event(gift_for_author_one, scope: scope)
+      :ok = Store.insert_event(gift_for_author_two, scope: scope)
+
+      authenticated_state = ConnectionState.authenticate_pubkey(state, @author_one)
+
+      request =
+        %Filter{kinds: [10_59]}
+        |> Message.request("sub-gift-wrap-auth")
+        |> Message.serialize()
+
+      expected_events = [
+        event_frame(gift_for_author_one, "sub-gift-wrap-auth"),
+        eose_frame("sub-gift-wrap-auth")
+      ]
+
+      assert {
+               :push,
+               ^expected_events,
+               routed_state
+             } = MessageRouter.route_frame(request, authenticated_state)
+
+      assert routed_state.store_scope == scope
+    end
+
+    test "counts gift-wraps by authenticated recipient only on COUNT", %{
+      state: state,
+      scope: scope
+    } do
+      :ok = Store.insert_event(gift_wrap_event(recipient: @author_one), scope: scope)
+      :ok = Store.insert_event(gift_wrap_event(recipient: @author_two), scope: scope)
+
+      count_request =
+        Message.count(%Filter{kinds: [10_59]}, "count-gift-wraps")
+        |> Message.serialize()
+
+      expected_unauth_count = Message.count(0, "count-gift-wraps") |> Message.serialize()
+      expected_auth_count = Message.count(1, "count-gift-wraps") |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_unauth_count}],
+               _auth_required_state
+             } = MessageRouter.route_frame(count_request, state)
+
+      authenticated_state = ConnectionState.authenticate_pubkey(state, @author_one)
+
+      assert {
+               :push,
+               [{:text, ^expected_auth_count}],
+               _authenticated_state
+             } = MessageRouter.route_frame(count_request, authenticated_state)
+    end
+
+    test "hides kind 4 encrypted messages from unauthenticated REQ readers", %{
+      state: state,
+      scope: scope
+    } do
+      encrypted_for_author_one = encrypted_direct_message_event(recipient: @author_one)
+      :ok = Store.insert_event(encrypted_for_author_one, scope: scope)
+
+      request =
+        %Filter{kinds: [4]}
+        |> Message.request("sub-kind4-no-auth")
+        |> Message.serialize()
+
+      expected_eose = eose_frame("sub-kind4-no-auth")
+
+      assert {
+               :push,
+               [^expected_eose],
+               routed_state
+             } = MessageRouter.route_frame(request, state)
+
+      assert routed_state.store_scope == scope
+    end
+
+    test "returns only matching recipient kind 4 events for authenticated REQ readers", %{
+      state: state,
+      scope: scope
+    } do
+      encrypted_for_author_one = encrypted_direct_message_event(recipient: @author_one)
+      encrypted_for_author_two = encrypted_direct_message_event(recipient: @author_two)
+
+      :ok = Store.insert_event(encrypted_for_author_one, scope: scope)
+      :ok = Store.insert_event(encrypted_for_author_two, scope: scope)
+
+      authenticated_state = ConnectionState.authenticate_pubkey(state, @author_one)
+
+      request =
+        %Filter{kinds: [4]}
+        |> Message.request("sub-kind4-auth")
+        |> Message.serialize()
+
+      expected_events = [
+        event_frame(encrypted_for_author_one, "sub-kind4-auth"),
+        eose_frame("sub-kind4-auth")
+      ]
+
+      assert {
+               :push,
+               ^expected_events,
+               routed_state
+             } = MessageRouter.route_frame(request, authenticated_state)
+
+      assert routed_state.store_scope == scope
+    end
+
+    test "counts kind 4 encrypted messages by authenticated recipient only on COUNT", %{
+      state: state,
+      scope: scope
+    } do
+      :ok =
+        Store.insert_event(encrypted_direct_message_event(recipient: @author_one), scope: scope)
+
+      :ok =
+        Store.insert_event(encrypted_direct_message_event(recipient: @author_two), scope: scope)
+
+      count_request =
+        Message.count(%Filter{kinds: [4]}, "count-kind4")
+        |> Message.serialize()
+
+      expected_unauth_count = Message.count(0, "count-kind4") |> Message.serialize()
+      expected_auth_count = Message.count(1, "count-kind4") |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_unauth_count}],
+               _auth_required_state
+             } = MessageRouter.route_frame(count_request, state)
+
+      authenticated_state = ConnectionState.authenticate_pubkey(state, @author_one)
+
+      assert {
+               :push,
+               [{:text, ^expected_auth_count}],
+               _authenticated_state
+             } = MessageRouter.route_frame(count_request, authenticated_state)
+    end
+
+    test "stores and serves kind 1059 gift-wraps with multiple recipients", %{
+      state: state,
+      scope: scope
+    } do
+      gift_for_both =
+        gift_wrap_event(
+          recipients: [@author_one, @author_two],
+          created_at: ~U[2024-01-01 12:00:00Z]
+        )
+
+      payload = Message.create_event(gift_for_both) |> Message.serialize()
+      expected_ok = Message.ok(gift_for_both.id, true, "") |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_ok}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+
+      recipient_one_state = ConnectionState.authenticate_pubkey(state, @author_one)
+      recipient_two_state = ConnectionState.authenticate_pubkey(state, @author_two)
+
+      both_recipients_state =
+        state
+        |> ConnectionState.authenticate_pubkey(@author_one)
+        |> ConnectionState.authenticate_pubkey(@author_two)
+
+      request =
+        %Filter{ids: [gift_for_both.id]}
+        |> Message.request("sub-gift-wrap-multi")
+        |> Message.serialize()
+
+      expected_frames = [
+        event_frame(gift_for_both, "sub-gift-wrap-multi"),
+        eose_frame("sub-gift-wrap-multi")
+      ]
+
+      assert {
+               :push,
+               ^expected_frames,
+               routed_one
+             } = MessageRouter.route_frame(request, recipient_one_state)
+
+      assert routed_one.store_scope == scope
+
+      assert {
+               :push,
+               ^expected_frames,
+               routed_two
+             } = MessageRouter.route_frame(request, recipient_two_state)
+
+      assert routed_two.store_scope == scope
+
+      assert {
+               :push,
+               ^expected_frames,
+               _routed_both
+             } = MessageRouter.route_frame(request, both_recipients_state)
+    end
+
+    test "rejects kind 1059 gift-wraps with no recipient p tags", %{state: state, scope: scope} do
+      invalid_gift_wrap =
+        Event.create(
+          10_59,
+          created_at: ~U[2024-01-01 12:00:00Z],
+          tags: [Tag.create(:e, "not-a-recipient")],
+          content: "gift wrapped"
+        )
+        |> Event.sign(@seckey)
+
+      payload = Message.create_event(invalid_gift_wrap) |> Message.serialize()
+
+      expected_error =
+        Message.ok(
+          invalid_gift_wrap.id,
+          false,
+          "rejected: gift-wrap requires at least one valid recipient p tag"
+        )
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_error}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+
+      assert {:ok, []} = Store.query_events([%Filter{ids: [invalid_gift_wrap.id]}], scope: scope)
+    end
+
+    test "rejects kind 1059 gift-wraps with invalid recipient p tags", %{
+      state: state,
+      scope: scope
+    } do
+      invalid_gift_wrap =
+        gift_wrap_event(
+          created_at: ~U[2024-01-01 12:00:00Z],
+          tags: [Tag.create(:p, "ZZZZ"), Tag.create(:p, "short")]
+        )
+
+      payload = Message.create_event(invalid_gift_wrap) |> Message.serialize()
+
+      expected_error =
+        Message.ok(
+          invalid_gift_wrap.id,
+          false,
+          "rejected: gift-wrap requires at least one valid recipient p tag"
+        )
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_error}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+
+      assert {:ok, []} = Store.query_events([%Filter{ids: [invalid_gift_wrap.id]}], scope: scope)
+    end
+
+    test "rejects kind 1059 gift-wraps when any recipient tag is malformed", %{
+      state: state,
+      scope: scope
+    } do
+      invalid_gift_wrap =
+        gift_wrap_event(
+          created_at: ~U[2024-01-01 12:00:00Z],
+          tags: [Tag.create(:p, @author_one), Tag.create(:p, "not-a-recipient")]
+        )
+
+      payload = Message.create_event(invalid_gift_wrap) |> Message.serialize()
+
+      expected_error =
+        Message.ok(
+          invalid_gift_wrap.id,
+          false,
+          "rejected: gift-wrap requires at least one valid recipient p tag"
+        )
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_error}],
+               %ConnectionState{messages: 1, store_scope: ^scope}
+             } = MessageRouter.route_frame(payload, state)
+
+      assert {:ok, []} = Store.query_events([%Filter{ids: [invalid_gift_wrap.id]}], scope: scope)
+    end
+
+    test "enforces gift-wrap visibility with mixed ids and kinds on REQ", %{
+      state: state,
+      scope: scope
+    } do
+      normal = valid_event(created_at: ~U[2024-01-01 12:00:00Z], created_by: @author_one)
+
+      gift_for_author_one =
+        gift_wrap_event(recipient: @author_one, created_at: ~U[2024-01-02 12:00:00Z])
+
+      gift_for_author_two =
+        gift_wrap_event(recipient: @author_two, created_at: ~U[2024-01-03 12:00:00Z])
+
+      :ok = Store.insert_event(normal, scope: scope)
+      :ok = Store.insert_event(gift_for_author_one, scope: scope)
+      :ok = Store.insert_event(gift_for_author_two, scope: scope)
+
+      mixed_filter = %Filter{
+        ids: [normal.id, gift_for_author_one.id, gift_for_author_two.id],
+        kinds: [1, 10_59]
+      }
+
+      request = Message.request(mixed_filter, "sub-gift-wrap-mixed") |> Message.serialize()
+
+      unauth_expected = [
+        event_frame(normal, "sub-gift-wrap-mixed"),
+        eose_frame("sub-gift-wrap-mixed")
+      ]
+
+      assert {
+               :push,
+               ^unauth_expected,
+               _unauth_state
+             } = MessageRouter.route_frame(request, state)
+
+      authenticated_state = ConnectionState.authenticate_pubkey(state, @author_one)
+
+      auth_expected = [
+        event_frame(gift_for_author_one, "sub-gift-wrap-mixed"),
+        event_frame(normal, "sub-gift-wrap-mixed"),
+        eose_frame("sub-gift-wrap-mixed")
+      ]
+
+      assert {
+               :push,
+               ^auth_expected,
+               _auth_state
+             } = MessageRouter.route_frame(request, authenticated_state)
+    end
+
+    test "enforces gift-wrap visibility with mixed ids and kinds on COUNT", %{
+      state: state,
+      scope: scope
+    } do
+      normal = valid_event(created_at: ~U[2024-01-01 12:00:00Z], created_by: @author_one)
+
+      gift_for_author_one =
+        gift_wrap_event(recipient: @author_one, created_at: ~U[2024-01-02 12:00:00Z])
+
+      gift_for_author_two =
+        gift_wrap_event(recipient: @author_two, created_at: ~U[2024-01-03 12:00:00Z])
+
+      :ok = Store.insert_event(normal, scope: scope)
+      :ok = Store.insert_event(gift_for_author_one, scope: scope)
+      :ok = Store.insert_event(gift_for_author_two, scope: scope)
+
+      mixed_filter = %Filter{
+        ids: [normal.id, gift_for_author_one.id, gift_for_author_two.id],
+        kinds: [1, 10_59]
+      }
+
+      request = Message.count(mixed_filter, "count-gift-wrap-mixed") |> Message.serialize()
+
+      expected_unauth = Message.count(1, "count-gift-wrap-mixed") |> Message.serialize()
+      expected_auth = Message.count(2, "count-gift-wrap-mixed") |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected_unauth}],
+               _unauth_state
+             } = MessageRouter.route_frame(request, state)
+
+      authenticated_state = ConnectionState.authenticate_pubkey(state, @author_one)
+
+      assert {
+               :push,
+               [{:text, ^expected_auth}],
+               _auth_state
+             } = MessageRouter.route_frame(request, authenticated_state)
     end
 
     test "rejects regular events already deleted by kind-5 references", %{
@@ -676,5 +1147,69 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       content: "relay ack"
     )
     |> Event.sign(created_by)
+  end
+
+  defp gift_wrap_event(opts) when is_list(opts) do
+    tags = Keyword.get(opts, :tags)
+
+    recipients =
+      Keyword.get(opts, :recipients, Keyword.get(opts, :recipient, @author_one))
+      |> List.wrap()
+
+    created_at = Keyword.get(opts, :created_at, ~U[2024-01-01 12:00:00Z])
+
+    tags =
+      case tags do
+        nil -> Enum.map(recipients, &Tag.create(:p, &1))
+        user_tags when is_list(user_tags) -> user_tags
+      end
+
+    Event.create(10_59,
+      created_at: created_at,
+      tags: tags,
+      content: "gift wrapped"
+    )
+    |> Event.sign(@seckey)
+  end
+
+  defp channel_metadata_event(opts) when is_list(opts) do
+    root_id = Keyword.get(opts, :root_id, String.duplicate("a", 64))
+    created_at = Keyword.get(opts, :created_at, ~U[2024-01-01 12:00:00Z])
+
+    tags =
+      Keyword.get(opts, :tags, [
+        Tag.create(:e, root_id, ["wss://relay", "root"]),
+        Tag.create(:t, "chat")
+      ])
+
+    Event.create(41,
+      created_at: created_at,
+      tags: tags,
+      content: "channel metadata"
+    )
+    |> Event.sign(@seckey)
+  end
+
+  defp encrypted_direct_message_event(opts) when is_list(opts) do
+    tags = Keyword.get(opts, :tags)
+
+    recipients =
+      Keyword.get(opts, :recipients, Keyword.get(opts, :recipient, @author_one))
+      |> List.wrap()
+
+    created_at = Keyword.get(opts, :created_at, ~U[2024-01-01 12:00:00Z])
+
+    tags =
+      case tags do
+        nil -> Enum.map(recipients, &Tag.create(:p, &1))
+        user_tags when is_list(user_tags) -> user_tags
+      end
+
+    Event.create(4,
+      created_at: created_at,
+      tags: tags,
+      content: "encrypted direct message"
+    )
+    |> Event.sign(@seckey)
   end
 end

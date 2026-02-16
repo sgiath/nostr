@@ -2,4 +2,6 @@
 name = "Test Relay"
 description = "A test relay"
 pubkey = "aabbccdd"
+self_pub = "ddeeff00"
+self_sec = "1122"
 contact = "mailto:test@example.com"

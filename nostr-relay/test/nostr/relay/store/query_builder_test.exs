@@ -4,6 +4,8 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
   alias Nostr.Event
   alias Nostr.Filter
   alias Nostr.Relay.Store
+  alias Nostr.Relay.Store.Group
+  alias Nostr.Relay.Store.GroupMember
   alias Nostr.Relay.Store.QueryBuilder
   alias Nostr.Tag
 
@@ -33,9 +35,16 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
     event
   end
 
-  defp query!(filter) do
-    {:ok, records} = QueryBuilder.query_events([filter])
+  defp query!(filter), do: query!(filter, [])
+
+  defp query!(filter, opts) do
+    {:ok, records} = QueryBuilder.query_events([filter], opts)
     records
+  end
+
+  defp count!(filter, opts) do
+    {:ok, count} = QueryBuilder.count_events([filter], opts)
+    count
   end
 
   defp event_ids(records), do: Enum.map(records, & &1.event_id)
@@ -44,6 +53,162 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
     records
     |> event_ids()
     |> MapSet.new()
+  end
+
+  defp insert_gift_wrap!(opts) do
+    recipients =
+      Keyword.get(opts, :recipients, Keyword.get(opts, :recipient, @seckey_a))
+      |> List.wrap()
+
+    seckey = Keyword.get(opts, :seckey, @seckey_a)
+    created_at = Keyword.get(opts, :created_at, ~U[2024-06-15 12:00:00Z])
+
+    tags =
+      recipients
+      |> Enum.map(&Tag.create(:p, &1))
+
+    event =
+      Event.create(10_59,
+        created_at: created_at,
+        tags: tags,
+        content: "gift wrapped"
+      )
+      |> Event.sign(seckey)
+
+    :ok = Store.insert_event(event, [])
+    event
+  end
+
+  defp insert_group!(group_id, attrs) do
+    attrs = Map.merge(%{group_id: group_id, managed: true}, attrs)
+
+    %Group{}
+    |> Group.changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  defp insert_group_member!(group_id, pubkey, status) do
+    %GroupMember{}
+    |> GroupMember.changeset(%{group_id: group_id, pubkey: pubkey, status: status})
+    |> Repo.insert!()
+  end
+
+  # --- Gift-wrap recipient filtering ---
+
+  describe "gift-wrap read filtering" do
+    test "hides gift-wrap events from unauthenticated recipient scopes" do
+      _gift = insert_gift_wrap!(recipient: @seckey_a)
+      normal = insert!(created_at: ~U[2024-06-16 12:00:00Z])
+
+      events = query!(%Filter{}, gift_wrap_recipients: [])
+      assert event_id_set(events) == MapSet.new([normal.id])
+      assert length(events) == 1
+    end
+
+    test "returns gift-wrap events for only matching recipients" do
+      event_for_a = insert_gift_wrap!(recipient: @seckey_a)
+      _event_for_b = insert_gift_wrap!(recipient: @seckey_b)
+
+      assert event_id_set(query!(%Filter{kinds: [10_59]}, gift_wrap_recipients: [@seckey_a])) ==
+               MapSet.new([event_for_a.id])
+
+      assert query!(%Filter{kinds: [10_59]}, gift_wrap_recipients: []) == []
+      assert count!(%Filter{kinds: [10_59]}, gift_wrap_recipients: [@seckey_a]) == 1
+    end
+
+    test "respects mixed ids and kinds filters with gift-wrap recipient visibility" do
+      normal = insert!(created_at: ~U[2024-06-10 12:00:00Z])
+      allowed_wrap = insert_gift_wrap!(recipient: @seckey_a, created_at: ~U[2024-06-11 12:00:00Z])
+      denied_wrap = insert_gift_wrap!(recipient: @seckey_b, created_at: ~U[2024-06-12 12:00:00Z])
+
+      mixed = %Filter{kinds: [1, 10_59], ids: [normal.id, allowed_wrap.id, denied_wrap.id]}
+
+      assert event_id_set(query!(mixed, gift_wrap_recipients: [@seckey_a])) ==
+               MapSet.new([normal.id, allowed_wrap.id])
+
+      assert event_id_set(query!(mixed, gift_wrap_recipients: [])) == MapSet.new([normal.id])
+
+      assert count!(mixed, gift_wrap_recipients: [@seckey_a]) == 2
+      assert count!(mixed, gift_wrap_recipients: []) == 1
+    end
+
+    test "accepts duplicated recipient entries without changing results" do
+      event_for_a = insert_gift_wrap!(recipient: @seckey_a)
+
+      recipients = [@seckey_a, @seckey_a, @seckey_a]
+
+      assert event_id_set(query!(%Filter{kinds: [10_59]}, gift_wrap_recipients: recipients)) ==
+               MapSet.new([event_for_a.id])
+    end
+
+    test "supports multiple recipient tags for visibility with any-match semantics" do
+      event_for_both =
+        insert_gift_wrap!(
+          recipients: [@seckey_a, @seckey_b],
+          created_at: ~U[2024-06-18 12:00:00Z]
+        )
+
+      assert event_id_set(query!(%Filter{kinds: [10_59]}, gift_wrap_recipients: [@seckey_a])) ==
+               MapSet.new([event_for_both.id])
+
+      assert event_id_set(query!(%Filter{kinds: [10_59]}, gift_wrap_recipients: [@seckey_b])) ==
+               MapSet.new([event_for_both.id])
+
+      assert query!(%Filter{kinds: [10_59]}, gift_wrap_recipients: []) == []
+    end
+  end
+
+  describe "group visibility filtering" do
+    setup do
+      original_nip29 = Application.get_env(:nostr_relay, :nip29)
+
+      Application.put_env(:nostr_relay, :nip29,
+        enabled: true,
+        allow_unmanaged_groups: true
+      )
+
+      on_exit(fn ->
+        Application.put_env(:nostr_relay, :nip29, original_nip29)
+      end)
+
+      :ok
+    end
+
+    test "hides private group events from non-members" do
+      group_id = "group_1"
+      insert_group!(group_id, %{private: true})
+
+      event =
+        insert!(
+          tags: [Tag.create(:h, group_id)],
+          content: "private hello",
+          created_at: ~U[2024-06-21 12:00:00Z]
+        )
+
+      events = query!(%Filter{ids: [event.id]}, group_viewer_pubkeys: [])
+      assert events == []
+
+      assert count!(%Filter{ids: [event.id]}, group_viewer_pubkeys: []) == 0
+    end
+
+    test "shows private group events to members" do
+      group_id = "group_2"
+      insert_group!(group_id, %{private: true})
+
+      event =
+        insert!(
+          tags: [Tag.create(:h, group_id)],
+          content: "private member hello",
+          created_at: ~U[2024-06-22 12:00:00Z]
+        )
+
+      insert_group_member!(group_id, event.pubkey, "member")
+
+      events = query!(%Filter{ids: [event.id]}, group_viewer_pubkeys: [event.pubkey])
+      assert event_id_set(events) == MapSet.new([event.id])
+
+      assert count!(%Filter{ids: [event.id]}, group_viewer_pubkeys: [event.pubkey]) == 1
+    end
   end
 
   # --- ids filter ---
@@ -447,6 +612,83 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
       {:ok, results} = QueryBuilder.query_events([%Filter{ids: [old.id, new.id]}])
       assert event_id_set(results) == MapSet.new([old.id, new.id])
       assert length(results) == 2
+    end
+
+    test "kind 41 uses root-marked e tag for collapse grouping" do
+      root_id = String.duplicate("1", 64)
+      alternate_id = String.duplicate("2", 64)
+
+      old =
+        insert!(
+          kind: 41,
+          tags: [Tag.create(:e, alternate_id), Tag.create(:e, root_id, ["wss://relay", "root"])],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      new =
+        insert!(
+          kind: 41,
+          tags: [Tag.create(:e, root_id, ["wss://relay", "root"])],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      {:ok, results} = QueryBuilder.query_events([%Filter{kinds: [41]}])
+      assert event_ids(results) == [new.id]
+      refute old.id in event_ids(results)
+    end
+
+    test "kind 41 falls back to first e tag when root marker is absent" do
+      root_id = String.duplicate("a", 64)
+      other_id = String.duplicate("b", 64)
+
+      _old =
+        insert!(
+          kind: 41,
+          tags: [Tag.create(:e, root_id), Tag.create(:e, other_id, ["wss://relay", "reply"])],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      new =
+        insert!(
+          kind: 41,
+          tags: [Tag.create(:e, root_id)],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      {:ok, results} = QueryBuilder.query_events([%Filter{kinds: [41]}])
+      assert event_ids(results) == [new.id]
+    end
+
+    test "kind 41 without e tags does not collapse" do
+      older =
+        insert!(kind: 41, tags: [Tag.create(:t, "chat")], created_at: ~U[2024-06-15 12:00:00Z])
+
+      newer =
+        insert!(kind: 41, tags: [Tag.create(:t, "chat")], created_at: ~U[2024-06-16 12:00:00Z])
+
+      {:ok, results} = QueryBuilder.query_events([%Filter{kinds: [41]}])
+      assert event_id_set(results) == MapSet.new([older.id, newer.id])
+    end
+
+    test "ids filter still collapses kind 41 by channel root" do
+      root_id = String.duplicate("f", 64)
+
+      old =
+        insert!(
+          kind: 41,
+          tags: [Tag.create(:e, root_id, ["wss://relay", "root"])],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      new =
+        insert!(
+          kind: 41,
+          tags: [Tag.create(:e, root_id, ["wss://relay", "root"])],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      {:ok, results} = QueryBuilder.query_events([%Filter{ids: [old.id, new.id]}])
+      assert event_ids(results) == [new.id]
     end
 
     test "ephemeral kinds are hidden from normal queries" do
@@ -888,6 +1130,27 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
       insert!(kind: 0, created_at: ~U[2024-06-16 12:00:00Z])
 
       assert {:ok, 1} = QueryBuilder.count_events([%Filter{kinds: [0]}])
+    end
+
+    test "count_events collapses kind 41 metadata by channel root" do
+      root_id = String.duplicate("3", 64)
+
+      old =
+        insert!(
+          kind: 41,
+          tags: [Tag.create(:e, root_id, ["wss://relay", "root"])],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      new =
+        insert!(
+          kind: 41,
+          tags: [Tag.create(:e, root_id, ["wss://relay", "root"])],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      assert {:ok, 1} = QueryBuilder.count_events([%Filter{kinds: [41]}])
+      assert {:ok, 1} = QueryBuilder.count_events([%Filter{ids: [old.id, new.id]}])
     end
 
     test "returns 0 for no matches" do

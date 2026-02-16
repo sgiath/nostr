@@ -15,6 +15,7 @@ defmodule Nostr.Relay.Pipeline.Engine do
   - `MessageValidator`
   - `EventValidator`
   - `RelayPolicyValidator`
+  - `GroupPolicyValidator`
   - `StorePolicy`
   - `MessageHandler`
 
@@ -37,6 +38,7 @@ defmodule Nostr.Relay.Pipeline.Engine do
     Nostr.Relay.Pipeline.Stages.MessageValidator,
     Nostr.Relay.Pipeline.Stages.EventValidator,
     Nostr.Relay.Pipeline.Stages.RelayPolicyValidator,
+    Nostr.Relay.Pipeline.Stages.GroupPolicyValidator,
     Nostr.Relay.Pipeline.Stages.StorePolicy,
     Nostr.Relay.Pipeline.Stages.MessageHandler
   ]

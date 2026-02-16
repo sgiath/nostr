@@ -19,16 +19,29 @@ defmodule Nostr.Relay.Web.RelayInfo do
   @spec metadata() :: t()
   def metadata do
     relay_info = Application.get_env(:nostr_relay, :relay_info, [])
+    relay_identity = Application.get_env(:nostr_relay, :relay_identity, [])
+    nip29 = Application.get_env(:nostr_relay, :nip29, [])
+    supported_nips = supported_nips(Keyword.get(relay_info, :supported_nips, []), nip29)
+    self_pubkey = Keyword.get(relay_identity, :self_pub)
 
     %{
       "name" => Keyword.get(relay_info, :name),
       "description" => Keyword.get(relay_info, :description),
       "pubkey" => Keyword.get(relay_info, :pubkey),
+      "self" => self_pubkey,
       "contact" => Keyword.get(relay_info, :contact),
       "software" => Keyword.get(relay_info, :software),
       "version" => Keyword.get(relay_info, :version),
-      "supported_nips" => Keyword.get(relay_info, :supported_nips, []),
+      "supported_nips" => supported_nips,
       "limits" => Keyword.get(relay_info, :limits, %{})
     }
+  end
+
+  defp supported_nips(current, nip29) when is_list(current) and is_list(nip29) do
+    if Keyword.get(nip29, :enabled, false) do
+      Enum.uniq(current ++ [29])
+    else
+      Enum.reject(current, &(&1 == 29))
+    end
   end
 end

@@ -4,10 +4,17 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
 
   Enforces write-side storage policy after protocol-level validation.
 
-  NIP-09 restriction:
+   NIP-09 restriction:
 
   Deletion events (`kind: 5`) may only target events published by the same
   pubkey that authored the deletion.
+
+  NIP-59 restriction:
+  - Gift-wrap events (`kind: 1059`) must include at least one valid recipient
+  tag (`p`) before they can be stored.
+
+  All `p` tags on a gift-wrap must be valid 32-byte hex pubkeys; malformed
+  recipient tags are rejected to avoid leaking opaque metadata.
   """
 
   import Ecto.Query
@@ -28,11 +35,22 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
     validate_delete_event_policy(event, context)
   end
 
+  def call(%Context{parsed_message: {:event, %Event{kind: 10_59} = event}} = context, _options) do
+    validate_gift_wrap_policy(event, context)
+  end
+
   def call(
         %Context{parsed_message: {:event, _sub_id, %Event{kind: 5} = event}} = context,
         _options
       ) do
     validate_delete_event_policy(event, context)
+  end
+
+  def call(
+        %Context{parsed_message: {:event, _sub_id, %Event{kind: 10_59} = event}} = context,
+        _options
+      ) do
+    validate_gift_wrap_policy(event, context)
   end
 
   def call(%Context{} = context, _options), do: {:ok, context}
@@ -57,6 +75,47 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
   end
 
   defp validate_delete_event_policy(_event, context), do: {:ok, context}
+
+  defp validate_gift_wrap_policy(%Event{tags: tags, id: event_id}, context)
+       when is_list(tags) do
+    if has_valid_recipient_tags?(tags) do
+      {:ok, context}
+    else
+      context =
+        context
+        |> Context.add_frame(
+          ok_frame(
+            event_id,
+            false,
+            "rejected: gift-wrap requires at least one valid recipient p tag"
+          )
+        )
+        |> Context.set_error(:gift_wrap_invalid_recipient)
+
+      {:error, :gift_wrap_invalid_recipient, context}
+    end
+  end
+
+  defp validate_gift_wrap_policy(_event, context), do: {:ok, context}
+
+  defp has_valid_recipient_tags?(tags) when is_list(tags) do
+    recipient_tags = Enum.filter(tags, &(&1.type == :p))
+
+    Enum.any?(recipient_tags, &valid_recipient_tag?/1) and
+      Enum.all?(recipient_tags, &valid_recipient_tag?/1)
+  end
+
+  defp valid_recipient_tag?(%Tag{type: :p, data: data}), do: valid_pubkey?(data)
+  defp valid_recipient_tag?(_tag), do: false
+
+  defp valid_pubkey?(data) when is_binary(data) do
+    case Base.decode16(data, case: :lower) do
+      {:ok, pubkey} when byte_size(pubkey) == 32 -> true
+      _ -> false
+    end
+  end
+
+  defp valid_pubkey?(_), do: false
 
   defp unauthorized_deletion_target?(tags, signer_pubkey) when is_list(tags) do
     unauthorized_event_id_target?(tags, signer_pubkey) or

@@ -24,7 +24,9 @@ defmodule Nostr.Relay.Web.SocketHandler do
   alias Nostr.Event
   alias Nostr.Filter
   alias Nostr.Message
+  alias Nostr.Tag
   alias Nostr.Relay.DebugLog
+  alias Nostr.Relay.Groups
   alias Nostr.Relay.Web.ConnectionState
   alias Nostr.Relay.Web.MessageRouter
 
@@ -70,7 +72,9 @@ defmodule Nostr.Relay.Web.SocketHandler do
   def handle_info({:new_event, %Event{} = event}, state) do
     frames =
       state.subscriptions
-      |> Enum.filter(fn {_sub_id, filters} -> Filter.any_match?(filters, event) end)
+      |> Enum.filter(fn {_sub_id, filters} ->
+        Filter.any_match?(filters, event) and event_visible_to_connection?(event, state)
+      end)
       |> Enum.map(fn {sub_id, _filters} ->
         serialized =
           event
@@ -114,4 +118,35 @@ defmodule Nostr.Relay.Web.SocketHandler do
   end
 
   defp log_outbound(result, _conn_id), do: result
+
+  defp event_visible_to_connection?(%Event{} = event, %ConnectionState{} = state) do
+    private_message_visible_to_connection?(event, state) and
+      group_visible_to_connection?(event, state)
+  end
+
+  defp private_message_visible_to_connection?(%Event{kind: kind}, _state)
+       when kind not in [4, 10_59],
+       do: true
+
+  defp private_message_visible_to_connection?(%Event{tags: tags}, %ConnectionState{} = state) do
+    recipients = recipient_pubkeys(tags)
+
+    recipients != [] and
+      Enum.any?(recipients, &ConnectionState.pubkey_authenticated?(state, &1))
+  end
+
+  defp recipient_pubkeys(tags) when is_list(tags) do
+    tags
+    |> Enum.reduce(MapSet.new(), fn
+      %Tag{type: :p, data: pubkey}, acc when is_binary(pubkey) -> MapSet.put(acc, pubkey)
+      _tag, acc -> acc
+    end)
+    |> MapSet.to_list()
+  end
+
+  defp recipient_pubkeys(_tags), do: []
+
+  defp group_visible_to_connection?(%Event{} = event, %ConnectionState{} = state) do
+    Groups.event_visible?(event, MapSet.to_list(state.authenticated_pubkeys))
+  end
 end

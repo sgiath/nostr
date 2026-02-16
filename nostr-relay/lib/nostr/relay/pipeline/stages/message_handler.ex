@@ -18,9 +18,13 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
   alias Nostr.Event
   alias Nostr.Filter
   alias Nostr.Message
+  alias Nostr.NIP29
   alias Nostr.Tag
+  alias Nostr.Relay.Groups
+  alias Nostr.Relay.Groups.RelayEvents
   alias Nostr.Relay.Pipeline.Context
   alias Nostr.Relay.Pipeline.Stage
+  alias Nostr.Relay.Replacement
   alias Nostr.Relay.Store
   alias Nostr.Relay.Store.QueryBuilder
   alias Nostr.Relay.Web.ConnectionState
@@ -87,7 +91,13 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
 
   defp route_parsed_message({:req, sub_id, filters}, state, _raw_json)
        when is_binary(sub_id) and is_list(filters) do
-    case Store.query_events(filters, scope: state.store_scope) do
+    query_opts = [
+      scope: state.store_scope,
+      gift_wrap_recipients: MapSet.to_list(state.authenticated_pubkeys),
+      group_viewer_pubkeys: MapSet.to_list(state.authenticated_pubkeys)
+    ]
+
+    case Store.query_events(filters, query_opts) do
       {:ok, events} ->
         event_frames =
           Enum.map(events, fn event ->
@@ -110,7 +120,13 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
 
   defp route_parsed_message({:count, sub_id, filters}, state, _raw_json)
        when is_binary(sub_id) and is_list(filters) do
-    case Store.count_events(filters, scope: state.store_scope) do
+    query_opts = [
+      scope: state.store_scope,
+      gift_wrap_recipients: MapSet.to_list(state.authenticated_pubkeys),
+      group_viewer_pubkeys: MapSet.to_list(state.authenticated_pubkeys)
+    ]
+
+    case Store.count_events(filters, query_opts) do
       {:ok, count} ->
         count_frame =
           count
@@ -273,6 +289,8 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
 
     case Store.insert_event(event, event_opts) do
       :ok ->
+        :ok = maybe_handle_group_side_effects(event)
+
         Phoenix.PubSub.broadcast(Nostr.Relay.PubSub, "nostr:events", {:new_event, event})
 
         {:push, [stored_event_ack_frame(event, is_deleted, state.store_scope)], state}
@@ -287,6 +305,21 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
         {:push, [ok_frame], state}
     end
   end
+
+  defp maybe_handle_group_side_effects(%Event{kind: 9_022} = event) do
+    with true <- Groups.enabled?(),
+         group_id when is_binary(group_id) <- NIP29.group_id_from_h(event),
+         {:ok, relay_event} <-
+           RelayEvents.auto_remove_user_event(group_id, event.pubkey, "removed by leave request"),
+         :ok <- Store.insert_event(relay_event, []) do
+      Phoenix.PubSub.broadcast(Nostr.Relay.PubSub, "nostr:events", {:new_event, relay_event})
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp maybe_handle_group_side_effects(_event), do: :ok
 
   defp stored_event_ack_frame(%Event{} = event, true, _scope),
     do: ok_frame(event.id, false, "rejected: event is deleted")
@@ -314,7 +347,7 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
   end
 
   defp replacement_event_stale?(%Event{} = event, scope) do
-    case replacement_type(event.kind) do
+    case Replacement.replacement_type(event.kind) do
       :regular ->
         false
 
@@ -338,10 +371,6 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
         end
     end
   end
-
-  defp replacement_type(kind) when kind in [0, 3] or kind in 10_000..19_999, do: :replaceable
-  defp replacement_type(kind) when kind in 30_000..39_999, do: :parameterized
-  defp replacement_type(_kind), do: :regular
 
   defp matching_replacement_event(_event, :replaceable, events) when is_list(events) do
     List.first(events)

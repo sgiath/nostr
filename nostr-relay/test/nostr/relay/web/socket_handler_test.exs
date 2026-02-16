@@ -6,6 +6,11 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
   alias Nostr.Message
   alias Nostr.Relay.Web.ConnectionState
   alias Nostr.Relay.Web.SocketHandler
+  alias Nostr.Tag
+
+  @seckey "1111111111111111111111111111111111111111111111111111111111111111"
+  @author_one "1111111111111111111111111111111111111111111111111111111111111111"
+  @author_two "2222222222222222222222222222222222222222222222222222222222222222"
 
   describe "lifecycle callbacks" do
     test "initializes state and sends AUTH challenge" do
@@ -214,6 +219,64 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
       assert frame =~ "match"
       refute frame =~ "no-match"
     end
+
+    test "does not push private-message kinds to unauthenticated subscriptions" do
+      for kind <- [4, 10_59] do
+        event = private_message_event(kind, recipients: [@author_one])
+        filter = %Filter{kinds: [kind], authors: [event.pubkey]}
+        state = ConnectionState.new() |> ConnectionState.add_subscription("sub-1", [filter])
+
+        assert {:ok, ^state} = SocketHandler.handle_info({:new_event, event}, state)
+      end
+    end
+
+    test "pushes private-message kinds to authenticated recipients" do
+      for kind <- [4, 10_59] do
+        event = private_message_event(kind, recipients: [@author_one])
+        filter = %Filter{kinds: [kind], authors: [event.pubkey]}
+
+        state =
+          ConnectionState.new()
+          |> ConnectionState.authenticate_pubkey(@author_one)
+          |> ConnectionState.add_subscription("sub-1", [filter])
+
+        expected_frame = event |> Message.event("sub-1") |> Message.serialize()
+
+        assert {:push, [{:text, ^expected_frame}], ^state} =
+                 SocketHandler.handle_info({:new_event, event}, state)
+      end
+    end
+
+    test "does not push private-message kinds to authenticated non-recipients" do
+      for kind <- [4, 10_59] do
+        event = private_message_event(kind, recipients: [@author_one])
+        filter = %Filter{kinds: [kind], authors: [event.pubkey]}
+
+        state =
+          ConnectionState.new()
+          |> ConnectionState.authenticate_pubkey(@author_two)
+          |> ConnectionState.add_subscription("sub-1", [filter])
+
+        assert {:ok, ^state} = SocketHandler.handle_info({:new_event, event}, state)
+      end
+    end
+
+    test "pushes private-message kinds to any authenticated recipient in p tags" do
+      for kind <- [4, 10_59] do
+        event = private_message_event(kind, recipients: [@author_one, @author_two])
+        filter = %Filter{kinds: [kind], authors: [event.pubkey]}
+
+        state =
+          ConnectionState.new()
+          |> ConnectionState.authenticate_pubkey(@author_two)
+          |> ConnectionState.add_subscription("sub-1", [filter])
+
+        expected_frame = event |> Message.event("sub-1") |> Message.serialize()
+
+        assert {:push, [{:text, ^expected_frame}], ^state} =
+                 SocketHandler.handle_info({:new_event, event}, state)
+      end
+    end
   end
 
   defp init_state do
@@ -222,10 +285,19 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
   end
 
   defp valid_signed_event do
-    seckey = "1111111111111111111111111111111111111111111111111111111111111111"
-
     1
     |> Event.create(content: "relay ack", created_at: ~U[2024-01-01 00:00:00Z])
-    |> Event.sign(seckey)
+    |> Event.sign(@seckey)
+  end
+
+  defp private_message_event(kind, opts) when kind in [4, 10_59] and is_list(opts) do
+    recipients = Keyword.get(opts, :recipients, [@author_one])
+    created_at = Keyword.get(opts, :created_at, ~U[2024-01-01 00:00:00Z])
+
+    tags = Enum.map(recipients, &Tag.create(:p, &1))
+
+    kind
+    |> Event.create(content: "private message", created_at: created_at, tags: tags)
+    |> Event.sign(@seckey)
   end
 end

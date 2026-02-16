@@ -3,9 +3,14 @@ defmodule Nostr.Relay.Store do
 
   alias Nostr.Event
   alias Nostr.Filter
+  alias Nostr.Relay.Groups
   alias Nostr.Relay.Repo
   alias Nostr.Relay.Store.Event, as: EventRecord
   alias Nostr.Relay.Store.EventTag
+  alias Nostr.Relay.Store.Group
+  alias Nostr.Relay.Store.GroupInvite
+  alias Nostr.Relay.Store.GroupMember
+  alias Nostr.Relay.Store.GroupRole
   alias Nostr.Relay.Store.QueryBuilder
   alias Nostr.Tag
 
@@ -22,8 +27,10 @@ defmodule Nostr.Relay.Store do
 
   @impl true
   @spec query_events([Filter.t()], keyword()) :: {:ok, [Event.t()]} | {:error, term()}
-  def query_events(filters, _opts) when is_list(filters) do
-    case QueryBuilder.query_events(filters) do
+  def query_events(filters, opts) when is_list(filters) and is_list(opts) do
+    query_opts = filter_query_options(opts)
+
+    case QueryBuilder.query_events(filters, query_opts) do
       {:ok, records} ->
         events =
           records
@@ -38,8 +45,10 @@ defmodule Nostr.Relay.Store do
 
   @impl true
   @spec count_events([Filter.t()], keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def count_events(filters, _opts) when is_list(filters) do
-    QueryBuilder.count_events(filters)
+  def count_events(filters, opts) when is_list(filters) and is_list(opts) do
+    query_opts = filter_query_options(opts)
+
+    QueryBuilder.count_events(filters, query_opts)
   rescue
     error -> {:error, error}
   end
@@ -51,9 +60,45 @@ defmodule Nostr.Relay.Store do
     QueryBuilder.event_matches_filters?(event_id, filters)
   end
 
+  defp filter_query_options(opts) when is_list(opts) do
+    []
+    |> maybe_put_gift_wrap_recipients(opts)
+    |> maybe_put_group_viewer_pubkeys(opts)
+  end
+
+  defp maybe_put_gift_wrap_recipients(query_opts, opts) do
+    case Keyword.fetch(opts, :gift_wrap_recipients) do
+      {:ok, recipients} when is_list(recipients) ->
+        Keyword.put(query_opts, :gift_wrap_recipients, recipients)
+
+      {:ok, recipient} ->
+        Keyword.put(query_opts, :gift_wrap_recipients, List.wrap(recipient))
+
+      :error ->
+        query_opts
+    end
+  end
+
+  defp maybe_put_group_viewer_pubkeys(query_opts, opts) do
+    case Keyword.fetch(opts, :group_viewer_pubkeys) do
+      {:ok, pubkeys} when is_list(pubkeys) ->
+        Keyword.put(query_opts, :group_viewer_pubkeys, pubkeys)
+
+      {:ok, pubkey} ->
+        Keyword.put(query_opts, :group_viewer_pubkeys, List.wrap(pubkey))
+
+      :error ->
+        query_opts
+    end
+  end
+
   @impl true
   @spec clear(keyword()) :: :ok
   def clear(_opts) do
+    Repo.delete_all(GroupInvite)
+    Repo.delete_all(GroupRole)
+    Repo.delete_all(GroupMember)
+    Repo.delete_all(Group)
     Repo.delete_all(EventTag)
     Repo.delete_all(EventRecord)
 
@@ -85,6 +130,7 @@ defmodule Nostr.Relay.Store do
         case EventRecord.changeset(%EventRecord{}, attrs) |> Repo.insert() do
           {:ok, _record} ->
             insert_tags(event)
+            maybe_apply_group_projection(event)
 
           {:error, reason} ->
             Repo.rollback(reason)
@@ -114,6 +160,16 @@ defmodule Nostr.Relay.Store do
   end
 
   defp insert_tags(_event), do: :ok
+
+  defp maybe_apply_group_projection(%Event{} = event) do
+    case Groups.apply_projection(event) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Repo.rollback(reason)
+    end
+  end
 
   defp decode_to_event(%EventRecord{event_id: event_id, raw_json: raw_json}) do
     with {:ok, decoded} <- decode_event_json(raw_json),

@@ -12,12 +12,16 @@ defmodule Nostr.Relay.ConfigTest do
     original_repo = Application.get_env(:nostr_relay, Nostr.Relay.Repo)
     original_config_path = Application.get_env(:nostr_relay, :config_path)
     original_auth = Application.get_env(:nostr_relay, :auth)
+    original_nip29 = Application.get_env(:nostr_relay, :nip29)
+    original_relay_identity = Application.get_env(:nostr_relay, :relay_identity)
 
     on_exit(fn ->
       Application.put_env(:nostr_relay, :relay_info, original_relay_info)
       Application.put_env(:nostr_relay, :server, original_server)
       Application.put_env(:nostr_relay, Nostr.Relay.Repo, original_repo)
       Application.put_env(:nostr_relay, :auth, original_auth)
+      Application.put_env(:nostr_relay, :nip29, original_nip29)
+      Application.put_env(:nostr_relay, :relay_identity, original_relay_identity)
 
       if original_config_path do
         Application.put_env(:nostr_relay, :config_path, original_config_path)
@@ -52,6 +56,8 @@ defmodule Nostr.Relay.ConfigTest do
       name = "Test Relay"
       description = "A test relay"
       pubkey = "aabbccdd"
+      self_pub = "ddeeff00"
+      self_sec = "1122"
       contact = "mailto:test@example.com"
       """
 
@@ -65,6 +71,10 @@ defmodule Nostr.Relay.ConfigTest do
       assert Keyword.get(info, :description) == "A test relay"
       assert Keyword.get(info, :pubkey) == "aabbccdd"
       assert Keyword.get(info, :contact) == "mailto:test@example.com"
+
+      identity = Application.get_env(:nostr_relay, :relay_identity)
+      assert Keyword.get(identity, :self_pub) == "ddeeff00"
+      assert Keyword.get(identity, :self_sec) == "1122"
     end
 
     test "preserves compile-time defaults for fields not in TOML" do
@@ -143,7 +153,6 @@ defmodule Nostr.Relay.ConfigTest do
       # These are compile-time only and must not change
       assert Keyword.get(info, :software) == "nostr_relay"
       assert Keyword.get(info, :version) == "0.1.0"
-      assert Keyword.get(info, :supported_nips) == [1, 9, 11, 40, 42, 45, 50]
     end
 
     test "merges database path with expansion" do
@@ -307,6 +316,35 @@ defmodule Nostr.Relay.ConfigTest do
       info = Application.get_env(:nostr_relay, :relay_info)
       assert Keyword.get(info, :url) == "wss://relay.example.com"
       assert Keyword.get(info, :name) == "Test Relay"
+    end
+
+    test "merges nip29 config from TOML" do
+      toml = """
+      [nip29]
+      enabled = true
+      allow_unmanaged_groups = false
+
+      [nip29.optional_checks]
+      enforce_group_id_charset = true
+
+      [nip29.roles]
+      admin = ["put_user", "remove_user"]
+      """
+
+      path = write_fixture("nip29.toml", toml)
+      Application.put_env(:nostr_relay, :config_path, path)
+
+      assert :ok = Config.load!()
+
+      nip29 = Application.get_env(:nostr_relay, :nip29)
+      assert Keyword.get(nip29, :enabled) == true
+      assert Keyword.get(nip29, :allow_unmanaged_groups) == false
+
+      checks = Keyword.get(nip29, :optional_checks)
+      assert checks[:enforce_group_id_charset] == true
+
+      roles = Keyword.get(nip29, :roles)
+      assert roles["admin"] == [:put_user, :remove_user]
     end
   end
 

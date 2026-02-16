@@ -5,21 +5,25 @@ defmodule Nostr.Relay.Store.QueryBuilder do
 
   alias Nostr.Event
   alias Nostr.Filter
+  alias Nostr.Relay.Groups.Visibility, as: GroupVisibility
   alias Nostr.Relay.Repo
   alias Nostr.Relay.Store.Event, as: EventRecord
   alias Nostr.Relay.Store.EventTag
+  alias Nostr.Relay.Replacement
   alias Nostr.Tag
 
   # --- Public API ---
 
-  @spec query_events([Filter.t()]) :: {:ok, [EventRecord.t()]}
-  def query_events(filters) when is_list(filters) do
+  @spec query_events([Filter.t()], keyword()) :: {:ok, [EventRecord.t()]}
+  def query_events(filters, opts \\ []) when is_list(filters) and is_list(opts) do
     filters = if filters == [], do: [%Filter{}], else: filters
 
     results =
       filters
       |> Enum.flat_map(&execute_single_filter/1)
       |> deduplicate_records()
+      |> apply_gift_wrap_recipient_filter(opts)
+      |> apply_group_visibility_filter(opts)
       |> apply_expiration_filter()
       |> apply_replacement_collapse(filters)
       |> apply_deletion_filter()
@@ -80,14 +84,16 @@ defmodule Nostr.Relay.Store.QueryBuilder do
 
   # --- Count API ---
 
-  @spec count_events([Filter.t()]) :: {:ok, non_neg_integer()}
-  def count_events(filters) when is_list(filters) do
+  @spec count_events([Filter.t()], keyword()) :: {:ok, non_neg_integer()}
+  def count_events(filters, opts \\ []) when is_list(filters) and is_list(opts) do
     filters = if filters == [], do: [%Filter{}], else: filters
 
     count =
       filters
       |> Enum.flat_map(&execute_single_filter/1)
       |> deduplicate_records()
+      |> apply_gift_wrap_recipient_filter(opts)
+      |> apply_group_visibility_filter(opts)
       |> apply_expiration_filter()
       |> apply_replacement_collapse(filters)
       |> apply_deletion_filter()
@@ -594,7 +600,7 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   # --- helpers ---
 
   defp apply_replacement_collapse(records, filters) do
-    if ids_only_filters?(filters) do
+    if ids_only_filters?(filters) and not kind_41_records?(records) do
       records
     else
       d_tags = fetch_parameterized_d_tags(records)
@@ -617,24 +623,76 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     end
   end
 
+  defp kind_41_records?(records) when is_list(records) do
+    Enum.any?(records, &(&1.kind == 41))
+  end
+
   defp replacement_group_key(%EventRecord{} = record, d_tags) do
-    case replacement_kind(record.kind) do
-      :replaceable ->
-        {:replaceable, record.pubkey, record.kind}
+    kind_41_group_key(record) ||
+      case replacement_kind(record.kind) do
+        :replaceable ->
+          {:replaceable, record.pubkey, record.kind}
 
-      :parameterized ->
-        {:parameterized, record.pubkey, record.kind, Map.get(d_tags, record.event_id, "")}
+        :parameterized ->
+          {:parameterized, record.pubkey, record.kind, Map.get(d_tags, record.event_id, "")}
 
-      :regular ->
-        {:regular, record.event_id}
+        :regular ->
+          {:regular, record.event_id}
+      end
+  end
+
+  defp kind_41_group_key(%EventRecord{kind: 41} = record) do
+    case extract_kind_41_root_e_tag(record) do
+      root_id when is_binary(root_id) -> {:channel_metadata_root, root_id}
+      _ -> nil
     end
   end
 
-  defp replacement_kind(kind) when kind in [0, 3] or kind in 10_000..19_999, do: :replaceable
+  defp kind_41_group_key(_record), do: nil
 
-  defp replacement_kind(kind) when kind in 30_000..39_999, do: :parameterized
+  defp extract_kind_41_root_e_tag(%EventRecord{raw_json: raw_json}) when is_binary(raw_json) do
+    tags = decode_event_tags(raw_json)
 
-  defp replacement_kind(_kind), do: :regular
+    root_marked_e_tag(tags) || first_e_tag(tags)
+  end
+
+  defp extract_kind_41_root_e_tag(_record), do: nil
+
+  defp decode_event_tags(raw_json) when is_binary(raw_json) do
+    case JSON.decode(raw_json) do
+      {:ok, %{"tags" => tags}} when is_list(tags) -> tags
+      _ -> []
+    end
+  end
+
+  defp root_marked_e_tag(tags) when is_list(tags) do
+    Enum.find_value(tags, fn
+      ["e", event_id, _relay, "root" | _rest] ->
+        if valid_kind_41_root_id?(event_id), do: event_id
+
+      ["e", event_id, "root" | _rest] ->
+        if valid_kind_41_root_id?(event_id), do: event_id
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp first_e_tag(tags) when is_list(tags) do
+    Enum.find_value(tags, fn
+      ["e", event_id | _rest] ->
+        if valid_kind_41_root_id?(event_id), do: event_id
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp valid_kind_41_root_id?(event_id) do
+    is_binary(event_id) and event_id != ""
+  end
+
+  defp replacement_kind(kind), do: Replacement.replacement_type(kind)
 
   defp newer_event?(%EventRecord{} = candidate, %EventRecord{} = existing) do
     candidate.created_at > existing.created_at or
@@ -662,10 +720,9 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     end)
   end
 
-  defp parameterized_replaceable_kind?(%EventRecord{kind: kind}) when kind in 30_000..39_999,
-    do: true
-
-  defp parameterized_replaceable_kind?(_record), do: false
+  defp parameterized_replaceable_kind?(%EventRecord{kind: kind}) do
+    Replacement.replacement_type(kind) == :parameterized
+  end
 
   defp ids_only_filters?(filters) do
     Enum.all?(filters, &ids_only_filter?/1)
@@ -691,6 +748,79 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   defp deduplicate_records(records) do
     Enum.uniq_by(records, & &1.event_id)
   end
+
+  # --- Private message read filtering ------------------------------------------
+
+  defp apply_gift_wrap_recipient_filter(records, opts) when is_list(records) do
+    case gift_wrap_recipients(opts) do
+      :no_filter ->
+        records
+
+      :exclude_all ->
+        Enum.reject(records, &private_message_kind?(&1.kind))
+
+      recipients when is_list(recipients) ->
+        {wrapped, others} = Enum.split_with(records, &private_message_kind?(&1.kind))
+
+        if wrapped == [] do
+          records
+        else
+          allowed_ids = visible_gift_wrap_event_ids(wrapped, recipients)
+
+          others ++ Enum.filter(wrapped, &MapSet.member?(allowed_ids, &1.event_id))
+        end
+    end
+  end
+
+  defp gift_wrap_recipients(opts) when is_list(opts) do
+    case Keyword.fetch(opts, :gift_wrap_recipients) do
+      {:ok, []} ->
+        :exclude_all
+
+      {:ok, nil} ->
+        :exclude_all
+
+      {:ok, recipients} when is_binary(recipients) ->
+        [recipients]
+
+      {:ok, recipients} when is_list(recipients) ->
+        recipients = Enum.uniq(recipients)
+
+        if recipients == [] do
+          :exclude_all
+        else
+          recipients
+        end
+
+      {:ok, _} ->
+        :exclude_all
+
+      :error ->
+        :no_filter
+    end
+  end
+
+  defp visible_gift_wrap_event_ids(wrapped_records, recipients) when is_list(wrapped_records) do
+    wrapped_ids =
+      wrapped_records
+      |> Enum.map(& &1.event_id)
+
+    if wrapped_ids == [] do
+      MapSet.new()
+    else
+      from(t in EventTag,
+        where:
+          t.event_id in ^wrapped_ids and
+            t.tag_name == "p" and
+            t.tag_value in ^recipients,
+        select: t.event_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+    end
+  end
+
+  defp private_message_kind?(kind), do: kind in [4, 10_59]
 
   # When all filters are search queries, preserve SQL relevance ordering.
   # Otherwise use created_at DESC then event_id ASC.
@@ -725,6 +855,52 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   end
 
   defp full_hex_id?(value) when is_binary(value), do: byte_size(value) == 64
+
+  # --- NIP-29 group visibility ---
+
+  defp apply_group_visibility_filter(records, opts) when is_list(records) and is_list(opts) do
+    case Keyword.fetch(opts, :group_viewer_pubkeys) do
+      {:ok, viewer_pubkeys} when is_list(viewer_pubkeys) ->
+        Enum.filter(records, fn record ->
+          case decode_record_event(record) do
+            %Event{} = event ->
+              GroupVisibility.visible?(
+                event,
+                viewer_pubkeys,
+                Application.get_env(:nostr_relay, :nip29, [])
+              )
+
+            _ ->
+              false
+          end
+        end)
+
+      {:ok, viewer_pubkey} when is_binary(viewer_pubkey) ->
+        apply_group_visibility_filter(records, group_viewer_pubkeys: [viewer_pubkey])
+
+      _ ->
+        records
+    end
+  end
+
+  defp apply_group_visibility_filter(records, _opts), do: records
+
+  defp decode_record_event(%EventRecord{raw_json: raw_json}) when is_binary(raw_json) do
+    case JSON.decode(raw_json) do
+      {:ok, map} ->
+        case Event.parse(map) do
+          %Event{} = event -> event
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp decode_record_event(_record), do: nil
 
   # --- FTS5 query sanitization ---
 
