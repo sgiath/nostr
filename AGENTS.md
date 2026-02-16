@@ -1,199 +1,145 @@
-# Nostr Monorepo
+# Nostr Monorepo Agent Guide
 
-Monorepo for Nostr-related Elixir libraries and tools. Nix flake dev environment
-(Erlang 28, Elixir 1.19). Uses `direnv` + `flake.nix` for shell setup.
+For coding agents operating in `/home/sgiath/develop/sgiath/nostr`.
+Focus: reliable commands, test targeting, and style rules.
 
-## Repository Layout
+## Scope and Layout
 
-```
+```text
 nostr/
-├── nostr-lib/         # Elixir library: low-level Nostr protocol (pure lib, no OTP app)
-├── nostr-client/      # Elixir library: Nostr relay WebSocket client (mint_web_socket)
-├── nak/               # Git submodule: fiatjaf/nak CLI (reference, do not edit)
-├── nips/              # Git submodule: nostr-protocol/nips specs (reference, do not edit)
-├── skills/nostr/      # nak CLI skill/reference doc
-└── flake.nix          # Nix dev shell (elixir, nodejs, python3, secp256k1, prettier)
+├── nostr-lib/      # Low-level Nostr protocol library (pure lib)
+├── nostr-client/   # OTP WebSocket client for relays
+├── nostr-relay/    # OTP relay server implementation
+├── nak/            # Read-only git submodule (reference)
+├── nips/           # Read-only git submodule (authoritative specs)
+├── relay-tester/   # Tooling for relay validation scenarios
+└── flake.nix       # Dev shell (Elixir, Erlang, Node, Python)
 ```
 
-`nak/` and `nips/` are read-only reference submodules. The NIP specs in `nips/` are
-the authoritative source for protocol behavior.
+`nips/` is the protocol authority and is read-only. `nak/` is also read-only.
+
+Preferred setup: `direnv allow` + Nix flake shell. Toolchain target: Erlang 28, Elixir 1.19.
+JSON rule: use built-in `JSON` only (never Jason/Poison).
 
 ## Definition of Done
 
-For all Elixir libraries/apps in this repo, a task is not done until
-`mix check --fix` passes successfully in the relevant project directory.
+Finish only when `mix check --fix` passes in the touched project directory.
+If there are known pre-existing failures, call them out clearly in your handoff.
+Root `.check.exs` order: compiler -> formatter -> unused_deps -> credo -> markdown -> ex_unit.
 
-## nostr-lib — Build & Test Commands
+## Build/Lint/Test Commands
 
-All commands run from `nostr-lib/` directory.
+Run commands from the target project directory unless stated otherwise.
+
+### nostr-lib
 
 ```bash
-# Dependencies
-mix deps.get
-
-# Compile (warnings = errors in CI)
-mix compile --warnings-as-errors
-
-# Format
-mix format
-mix format --check-formatted        # CI check
-
-# Lint
-mix credo
-
-# Markdown formatting (from repo root)
-prettier **/*.md --check             # check
-prettier **/*.md --write             # fix
-
-# Tests
-mix test                             # all tests
-mix test path/to/test.exs            # single file
-mix test path/to/test.exs:42         # single test at line
-mix test --exclude nip05_http        # skip HTTP-dependent tests
-mix test --exclude ecdh              # skip ECDH tests
-
-# Full pre-commit check (compile + unused deps + format + credo + prettier + tests)
+mix test test/nostr/some_module_test.exs
+mix test test/nostr/some_module_test.exs:42
+mix test --exclude nip05_http
+mix test --exclude ecdh
 mix check --fix
 ```
 
-`mix check` runs the full pipeline defined in `.check.exs`:
-compiler -> formatter -> unused_deps -> credo -> prettier markdown -> ex_unit.
-
-## nostr-lib — Code Style
-
-### Module Layout (enforced by Credo StrictModuleLayout)
-
-```elixir
-defmodule Nostr.Event.YourModule do
-  @moduledoc """..."""
-  @moduledoc tags: [:event, :nipXX], nip: XX    # NIP metadata
-
-  alias Nostr.Tag                                 # aliases first, sorted
-
-  defstruct [:event, :your_field]                 # struct definition
-
-  @type t() :: %__MODULE__{...}                   # typespecs
-
-  # Public API: @doc + @spec before every public function
-  @spec parse(Nostr.Event.t()) :: t()
-  def parse(%Nostr.Event{kind: N} = event) do ... end
-
-  @spec create(binary(), Keyword.t()) :: t()
-  def create(field, opts \\ []) do ... end
-
-  # Private helpers at the bottom
-  defp helper(...), do: ...
-end
-```
-
-### Formatting & Line Length
-
-- Max line length: **120 chars** (Credo). Keep under 98 when practical.
-- Standard `mix format` — no custom `.formatter.exs` options beyond file inputs.
-- Files should stay under ~500 lines; split/refactor if larger.
-
-### Naming
-
-- Modules: `Nostr.Event.CamelCase` — match the Nostr event kind name.
-- Functions: `snake_case`. Predicate fns end in `?` (e.g. `reply?/1`).
-- Module attributes: `@snake_case`.
-- Variables: `snake_case`. Unused vars prefixed with `_`.
-- Test modules: `Nostr.Event.YourModuleTest` in `test/nostr/event/your_module_test.exs`.
-
-### Imports & Aliases
-
-- Use `alias` — never `import` entire modules (exceptions: `ExUnit.Case`, `Logger`).
-- `require Logger` when using Logger macros.
-- Aliases sorted alphabetically (Credo AliasOrder).
-- No multi-alias (`alias Nostr.{A, B}`) — one alias per line (Credo MultiAlias).
-- Separate `alias` and `require` blocks (Credo SeparateAliasRequire).
-
-### Types & Specs
-
-- `@type t()` on every struct module.
-- `@spec` on every public function.
-- Use `binary()` for hex-encoded strings (keys, IDs, signatures).
-- Use `DateTime.t()` for timestamps (not unix integers).
-- Hex key sizes: `<<_::32, _::_*8>>` for 32-byte, `<<_::64, _::_*8>>` for 64-byte.
-
-### Error Handling
-
-- Return `{:ok, result}` | `{:error, reason}` | `{:error, reason, event}`.
-- `parse/1` returns `nil` for invalid/unrecognized input (not exceptions).
-- Validation events (ZapRequest, ClientAuth) may return `{:error, reason, event}`.
-- Use `raise` only for programmer errors (mismatched pubkey/seckey, wrong ID).
-
-### JSON
-
-- **Elixir 1.18+ built-in `JSON` module** — never `Jason` or `Poison`.
-- `JSON.encode!/1`, `JSON.decode!/1`, `JSON.decode/1`.
-- Custom `JSON.Encoder` protocol impls live at bottom of the struct's file.
-
-### Tags
-
-- Tags are `%Nostr.Tag{type: atom(), data: binary(), info: [binary()]}`.
-- Build with `Nostr.Tag.create(:type, data)` or `Nostr.Tag.create(:type, data, info_list)`.
-- Filter tags: `Enum.filter(tags, &(&1.type == :e))`.
-
-### Event Module Pattern
-
-Every event type in `lib/nostr/event/` follows:
-
-1. `parse/1` — pattern-match on `%Nostr.Event{kind: N}`, return typed struct
-2. `create/n` — build event with domain opts, call `Nostr.Event.create/2`, then `parse/1`
-3. Register kind in `parser.ex` via `parse_specific/1` clause
-
-### Test Conventions
-
-- `use ExUnit.Case, async: true` — all tests must be async.
-- `doctest ModuleName` for modules with iex examples.
-- Use `Nostr.Test.Fixtures` for keypairs and event builders — never hardcode keys.
-- Tag slow/external tests: `@tag :nip05_http`, `@tag :ecdh`.
-- Test file structure mirrors `lib/` (e.g. `lib/nostr/nip44.ex` -> `test/nostr/nip44_test.exs`).
-- `describe "function_name/arity"` blocks grouping related tests.
-
-### Deprecation Handling
-
-- `DirectMessage` (Kind 4) — use NIP-17 `PrivateMessage` + `Nostr.NIP17` instead.
-- `Repost` (Kind 6) — use NIP-27 text note references instead.
-- `RecommendRelay` (Kind 2) — use NIP-65 `RelayList` instead.
-- Deprecated modules log `Logger.warning()` on parse/create but are kept for compat.
-
-### Cross-NIP Delegation
-
-| Concern          | Module        | Used by                          |
-| ---------------- | ------------- | -------------------------------- |
-| List encryption  | `Nostr.NIP51` | Bookmarks, RelayList, Mute, etc. |
-| Custom emoji     | `Nostr.NIP30` | Note, Metadata, Reaction         |
-| Content warnings | `Nostr.NIP36` | Note, Article                    |
-| External IDs     | `Nostr.NIP39` | Metadata                         |
-| Zap utilities    | `Nostr.NIP57` | ZapRequest, ZapReceipt           |
-
-### Do Not
-
-- Use `# credo:disable-for-this-file` (next-line disable is acceptable in Tag.parse).
-- Use `Jason`/`Poison` — only built-in `JSON`.
-- Hardcode test keypairs — use `Nostr.Test.Fixtures`.
-- Edit files in `nak/` or `nips/` — they are read-only submodules.
-- Add OTP application behavior to nostr-lib — it is a pure library.
-
-## vanity_npub.py
-
-Python 3 script. Runs inside a `.venv` managed by the Nix shell hook.
+### nostr-client
 
 ```bash
-python vanity_npub.py npub <prefix>        # bech32 vanity search
-python vanity_npub.py hex <prefix>         # hex vanity search
-python vanity_npub.py bip39 <seed words>   # NIP-06 key derivation
+mix test test/nostr/client/session_test.exs
+mix test test/nostr/client/session_test.exs:42
+mix test --exclude integration
+mix check --fix
 ```
 
-## Key Dependencies (nostr-lib)
+### nostr-relay
 
-| Package         | Purpose                        |
-| --------------- | ------------------------------ |
-| `lib_secp256k1` | Schnorr signatures, ECDH       |
-| `bechamel`      | Bech32 encoding                |
-| `scrypt`        | NIP-49 key derivation          |
-| `req`           | Optional: NIP-05 HTTP lookup   |
-| `ex_check`      | Dev: runs `mix check` pipeline |
-| `credo`         | Dev: linting                   |
+`mix test` is aliased to create/migrate test DB first.
+
+```bash
+mix test test/nostr/relay/pipeline/message_handler_test.exs
+mix test test/nostr/relay/pipeline/message_handler_test.exs:42
+mix test --include integration
+mix check --fix
+```
+
+Repo-root utilities: `prettier **/*.md --check|--write` and
+`python vanity_npub.py npub|hex|bip39 ...`.
+
+## Code Style (All Elixir Projects)
+
+### Module structure
+
+- Keep strict layout: moduledoc, aliases/requires, struct, types, public funcs, private funcs.
+- Put `@doc` + `@spec` on every public function.
+- Keep private helpers at bottom of module.
+
+### Imports / aliases / require
+
+- Prefer `alias`; avoid broad `import` (exceptions: `ExUnit.Case`, sometimes `Logger`).
+- Use one alias per line; no multi-alias forms.
+- Keep aliases alphabetized.
+- Use separate `alias` and `require` sections.
+- `require Logger` before Logger macros.
+
+### Formatting and file size
+
+- Run `mix format`; do not hand-format against formatter output.
+- Credo max line length is 120 chars; stay near 98 when practical.
+- Keep files around or under 500 LOC; split when growth makes review harder.
+
+### Naming conventions
+
+- Modules: `Nostr.*.CamelCase`.
+- Functions/vars/attrs: `snake_case`.
+- Predicate functions end with `?`.
+- Unused variables must be prefixed with `_`.
+- Test module/file names should mirror `lib/` structure.
+
+### Types and specs
+
+- Add `@type t()` for every struct module.
+- Add `@spec` to all public APIs.
+- Use `binary()` for hex identifiers/keys/signatures.
+- Prefer `DateTime.t()` in structs/APIs; convert to unix only at protocol boundaries.
+
+### Error handling
+
+- Prefer tagged tuples: `{:ok, value}` / `{:error, reason}`.
+- Event validation may also return `{:error, reason, event}`.
+- `parse/1` in event modules should return `nil` for unsupported/invalid input.
+- Raise only for programmer errors or violated invariants.
+
+### JSON and encoding
+
+- Use `JSON.encode!/1`, `JSON.decode!/1`, `JSON.decode/1`.
+- Keep custom `JSON.Encoder` impls with their owning struct modules.
+
+### Testing conventions
+
+- Default to `use ExUnit.Case, async: true`.
+- Group by `describe "function_name/arity"`.
+- Use fixtures/helpers from `test/support` or `Nostr.Test.Fixtures`; do not hardcode keypairs.
+- Typical selective runs: `mix test path/to/test.exs`, `mix test path/to/test.exs:LINE`,
+  `mix test --exclude integration`, `mix test --include integration`.
+
+## Nostr-specific rules
+
+- Follow NIP specs from `nips/` as source of truth.
+- For new event kinds in `nostr-lib`: add module in `lib/nostr/event/`,
+  implement `parse/1` + `create/...`, register in `lib/nostr/event/parser.ex`,
+  and add mirrored tests in `test/nostr/event/`.
+- Respect deprecations:
+  - Kind 4 `DirectMessage` -> prefer NIP-17
+  - Kind 6 `Repost` -> prefer NIP-27 references
+  - Kind 2 `RecommendRelay` -> prefer NIP-65 `RelayList`
+
+## Safety and repo hygiene
+
+- Never edit read-only submodules: `nak/`, `nips/`.
+- Do not add OTP app behavior to `nostr-lib` (it is a pure library).
+- Avoid file-wide Credo disables (`# credo:disable-for-this-file`).
+- Keep changes focused; do not refactor unrelated areas opportunistically.
+
+## Cursor / Copilot rule files
+
+Checked `.cursorrules`, `.cursor/rules/`, and `.github/copilot-instructions.md`.
+No Cursor or Copilot instruction files were found in this repository.

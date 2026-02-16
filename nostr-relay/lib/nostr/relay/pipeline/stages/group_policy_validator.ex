@@ -32,7 +32,11 @@ defmodule Nostr.Relay.Pipeline.Stages.GroupPolicyValidator do
 
   defp validate_event(%Event{} = event, %Context{connection_state: state} = context) do
     if Groups.enabled?() do
-      checks = Groups.options() |> Keyword.get(:optional_checks, %{}) |> Map.new()
+      checks =
+        Groups.options()
+        |> Keyword.get(:optional_checks, %{})
+        |> Map.new()
+
       strict_ids? = Map.get(checks, :enforce_group_id_charset, false)
 
       with {:ok, _} <- NIP29.validate_required_group_tag(event, strict_group_ids: strict_ids?),

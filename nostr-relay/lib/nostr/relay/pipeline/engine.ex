@@ -192,7 +192,10 @@ defmodule Nostr.Relay.Pipeline.Engine do
   end
 
   defp stage_name(stage) when is_atom(stage),
-    do: stage |> Module.split() |> List.last()
+    do:
+      stage
+      |> Module.split()
+      |> List.last()
 
   defp stage_name(stage), do: stage
 end

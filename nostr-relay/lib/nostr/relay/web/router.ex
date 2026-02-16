@@ -80,7 +80,10 @@ defmodule Nostr.Relay.Web.Router do
       header
       |> String.split(",", trim: true)
       |> Enum.any?(fn candidate ->
-        String.starts_with?(String.downcase(String.trim(candidate)), "application/nostr+json")
+        candidate
+        |> String.trim()
+        |> String.downcase()
+        |> String.starts_with?("application/nostr+json")
       end)
     end)
   end

@@ -131,15 +131,13 @@ defmodule Nostr.Relay.ConfigTest do
       assert limits[:max_limit] == 10_000
     end
 
-    test "ignores nips, software, and version from TOML" do
+    test "merges relay supported_nips but ignores software and version from TOML" do
       toml = """
       [relay]
       name = "Override Name"
       software = "evil_relay"
       version = "9.9.9"
-
-      [nips]
-      supported = [1, 11, 42]
+      supported_nips = [42, 11, 70, 42]
       """
 
       path = write_fixture("compile_time.toml", toml)
@@ -150,6 +148,7 @@ defmodule Nostr.Relay.ConfigTest do
       info = Application.get_env(:nostr_relay, :relay_info)
       # Name is overridden
       assert Keyword.get(info, :name) == "Override Name"
+      assert Keyword.get(info, :supported_nips) == [11, 42, 70]
       # These are compile-time only and must not change
       assert Keyword.get(info, :software) == "nostr_relay"
       assert Keyword.get(info, :version) == "0.1.0"

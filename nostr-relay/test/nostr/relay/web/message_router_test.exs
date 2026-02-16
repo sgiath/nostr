@@ -330,8 +330,11 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       state: state,
       scope: scope
     } do
-      :ok = Store.insert_event(gift_wrap_event(recipient: @author_one), scope: scope)
-      :ok = Store.insert_event(gift_wrap_event(recipient: @author_two), scope: scope)
+      gift_for_author_one = gift_wrap_event(recipient: @author_one)
+      gift_for_author_two = gift_wrap_event(recipient: @author_two)
+
+      :ok = Store.insert_event(gift_for_author_one, scope: scope)
+      :ok = Store.insert_event(gift_for_author_two, scope: scope)
 
       count_request =
         Message.count(%Filter{kinds: [10_59]}, "count-gift-wraps")
@@ -413,11 +416,14 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       state: state,
       scope: scope
     } do
-      :ok =
-        Store.insert_event(encrypted_direct_message_event(recipient: @author_one), scope: scope)
+      encrypted_for_author_one = encrypted_direct_message_event(recipient: @author_one)
+      encrypted_for_author_two = encrypted_direct_message_event(recipient: @author_two)
 
       :ok =
-        Store.insert_event(encrypted_direct_message_event(recipient: @author_two), scope: scope)
+        Store.insert_event(encrypted_for_author_one, scope: scope)
+
+      :ok =
+        Store.insert_event(encrypted_for_author_two, scope: scope)
 
       count_request =
         Message.count(%Filter{kinds: [4]}, "count-kind4")

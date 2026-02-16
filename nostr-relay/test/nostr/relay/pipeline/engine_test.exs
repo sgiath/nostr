@@ -166,10 +166,16 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
       assert {:ok, events} = Store.query_events([%Filter{kinds: [0]}], [])
       assert Enum.map(events, & &1.id) == [newer.id]
 
-      assert Repo.all(
-               from(record in EventRecord, where: record.kind == 0, select: record.event_id)
-             )
-             |> Enum.sort() == [newer.id, older.id] |> Enum.sort()
+      stored_ids =
+        from(record in EventRecord, where: record.kind == 0, select: record.event_id)
+        |> Repo.all()
+        |> Enum.sort()
+
+      expected_ids =
+        [newer.id, older.id]
+        |> Enum.sort()
+
+      assert stored_ids == expected_ids
     end
 
     test "returns OK false for stale parameterized replaceable events but keeps event storage" do
@@ -212,10 +218,16 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
       assert {:ok, events} = Store.query_events([%Filter{kinds: [30_000]}], [])
       assert Enum.map(events, & &1.id) == [newer.id]
 
-      assert Repo.all(
-               from(record in EventRecord, where: record.kind == 30_000, select: record.event_id)
-             )
-             |> Enum.sort() == [newer.id, older.id] |> Enum.sort()
+      stored_ids =
+        from(record in EventRecord, where: record.kind == 30_000, select: record.event_id)
+        |> Repo.all()
+        |> Enum.sort()
+
+      expected_ids =
+        [newer.id, older.id]
+        |> Enum.sort()
+
+      assert stored_ids == expected_ids
     end
 
     test "returns OK false when an already stored older replaceable event is retried" do
@@ -296,12 +308,11 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
       assert ["OK", ^event_id, true, "duplicate: already have this event"] =
                JSON.decode!(dup_ok_json)
 
-      assert Repo.aggregate(
-               from(record in EventRecord, where: record.event_id == ^event.id),
-               :count,
-               :event_id
-             ) ==
-               1
+      duplicate_count =
+        from(record in EventRecord, where: record.event_id == ^event.id)
+        |> Repo.aggregate(:count, :event_id)
+
+      assert duplicate_count == 1
     end
 
     test "returns invalid pipeline result when a stage returns invalid output" do
@@ -456,17 +467,17 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
 
       assert ["OK", ^target_id, false, "rejected: event is deleted"] = JSON.decode!(ok_json)
 
-      assert Repo.aggregate(
-               from(record in EventRecord, where: record.event_id == ^target.id),
-               :count,
-               :event_id
-             ) == 1
+      target_count =
+        from(record in EventRecord, where: record.event_id == ^target.id)
+        |> Repo.aggregate(:count, :event_id)
 
-      assert Repo.aggregate(
-               from(record in EventRecord, where: record.event_id == ^deletion.id),
-               :count,
-               :event_id
-             ) == 1
+      assert target_count == 1
+
+      deletion_count =
+        from(record in EventRecord, where: record.event_id == ^deletion.id)
+        |> Repo.aggregate(:count, :event_id)
+
+      assert deletion_count == 1
 
       assert {
                :push,
@@ -476,11 +487,11 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
 
       assert ["OK", ^target_id, false, "rejected: event is deleted"] = JSON.decode!(dup_ok_json)
 
-      assert Repo.aggregate(
-               from(record in EventRecord, where: record.event_id == ^target.id),
-               :count,
-               :event_id
-             ) == 1
+      retried_target_count =
+        from(record in EventRecord, where: record.event_id == ^target.id)
+        |> Repo.aggregate(:count, :event_id)
+
+      assert retried_target_count == 1
 
       assert {:ok, []} = Store.query_events([%Filter{ids: [target.id]}], [])
     end
@@ -586,6 +597,77 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
              } = Engine.run(payload, state)
 
       assert ["OK", ^target_id, false, "rejected: event is deleted"] = JSON.decode!(ok_json)
+    end
+
+    test "rejects protected events when no matching pubkey is authenticated" do
+      state = ConnectionState.new()
+      event = valid_event(tags: [Tag.create("-")])
+
+      payload =
+        event
+        |> Message.create_event()
+        |> Message.serialize()
+
+      assert {:push, [{:text, ok_json}], %ConnectionState{messages: 1}} =
+               Engine.run(payload, state)
+
+      assert [
+               "OK",
+               event_id,
+               false,
+               "auth-required: protected event requires matching authenticated pubkey"
+             ] = JSON.decode!(ok_json)
+
+      assert event_id == event.id
+      assert {:ok, []} = Store.query_events([%Filter{ids: [event.id]}], [])
+    end
+
+    test "rejects protected events when a different pubkey is authenticated" do
+      event = valid_event(tags: [Tag.create("-")])
+
+      state =
+        ConnectionState.new()
+        |> ConnectionState.authenticate_pubkey(Nostr.Crypto.pubkey(@seckey_b))
+
+      payload =
+        event
+        |> Message.create_event()
+        |> Message.serialize()
+
+      assert {:push, [{:text, ok_json}], %ConnectionState{messages: 1}} =
+               Engine.run(payload, state)
+
+      assert [
+               "OK",
+               event_id,
+               false,
+               "auth-required: protected event requires matching authenticated pubkey"
+             ] = JSON.decode!(ok_json)
+
+      assert event_id == event.id
+      assert {:ok, []} = Store.query_events([%Filter{ids: [event.id]}], [])
+    end
+
+    test "accepts protected events when author pubkey is authenticated" do
+      event = valid_event(tags: [Tag.create("-")])
+
+      state =
+        ConnectionState.new()
+        |> ConnectionState.authenticate_pubkey(event.pubkey)
+
+      payload =
+        event
+        |> Message.create_event()
+        |> Message.serialize()
+
+      assert {:push, [{:text, ok_json}], %ConnectionState{messages: 1}} =
+               Engine.run(payload, state)
+
+      assert ["OK", event_id, true, ""] = JSON.decode!(ok_json)
+      assert event_id == event.id
+
+      assert {:ok, [stored_event]} = Store.query_events([%Filter{ids: [event.id]}], [])
+      assert stored_event.id == event.id
     end
   end
 

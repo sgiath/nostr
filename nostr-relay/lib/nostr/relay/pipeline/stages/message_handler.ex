@@ -352,24 +352,31 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageHandler do
         false
 
       replacement_type ->
-        filter = %Filter{authors: [event.pubkey], kinds: [event.kind]}
-
-        case Store.query_events([filter], scope: scope) do
-          {:ok, events} ->
-            other_events = Enum.reject(events, &(&1.id == event.id))
-
-            case matching_replacement_event(event, replacement_type, other_events) do
-              nil ->
-                false
-
-              existing ->
-                not newer_replacement?(event, existing)
-            end
-
-          {:error, _reason} ->
-            false
-        end
+        replacement_event_stale?(event, replacement_type, scope)
     end
+  end
+
+  defp replacement_event_stale?(%Event{} = event, replacement_type, scope) do
+    filter = %Filter{authors: [event.pubkey], kinds: [event.kind]}
+
+    with {:ok, events} <- Store.query_events([filter], scope: scope),
+         %Event{} = existing <- matching_existing_replacement(event, replacement_type, events) do
+      not newer_replacement?(event, existing)
+    else
+      _ -> false
+    end
+  end
+
+  defp matching_existing_replacement(%Event{} = event, replacement_type, events)
+       when is_list(events) do
+    events
+    |> Enum.reject(&(&1.id == event.id))
+    |> matching_replacement_event(event, replacement_type)
+  end
+
+  defp matching_replacement_event(events, %Event{} = event, replacement_type)
+       when is_list(events) do
+    matching_replacement_event(event, replacement_type, events)
   end
 
   defp matching_replacement_event(_event, :replaceable, events) when is_list(events) do

@@ -43,9 +43,11 @@ defmodule Nostr.Relay.Groups.AuthorizationTest do
       Event.create(1, tags: [Tag.create(:h, "group_1")])
       |> Event.sign(@seckey_a)
 
-    Repo.insert!(
-      Group.changeset(%Group{}, %{group_id: "group_1", restricted: true, managed: true})
-    )
+    group_attrs = %{group_id: "group_1", restricted: true, managed: true}
+
+    %Group{}
+    |> Group.changeset(group_attrs)
+    |> Repo.insert!()
 
     assert {:error, "restricted: group write requires membership"} =
              Authorization.authorize_event(event, [], enabled: true)
@@ -56,16 +58,17 @@ defmodule Nostr.Relay.Groups.AuthorizationTest do
       Event.create(1, tags: [Tag.create(:h, "group_1")])
       |> Event.sign(@seckey_a)
 
-    Repo.insert!(
-      Group.changeset(%Group{}, %{group_id: "group_1", restricted: true, managed: true})
-    )
+    group_attrs = %{group_id: "group_1", restricted: true, managed: true}
 
-    Repo.insert!(
-      GroupMember.changeset(
-        %GroupMember{},
-        %{group_id: "group_1", pubkey: event.pubkey, status: "member"}
-      )
-    )
+    %Group{}
+    |> Group.changeset(group_attrs)
+    |> Repo.insert!()
+
+    member_attrs = %{group_id: "group_1", pubkey: event.pubkey, status: "member"}
+
+    %GroupMember{}
+    |> GroupMember.changeset(member_attrs)
+    |> Repo.insert!()
 
     assert :ok = Authorization.authorize_event(event, [], enabled: true)
   end

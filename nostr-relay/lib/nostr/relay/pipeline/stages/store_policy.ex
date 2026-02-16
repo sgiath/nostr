@@ -9,6 +9,10 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
   Deletion events (`kind: 5`) may only target events published by the same
   pubkey that authored the deletion.
 
+   NIP-70 restriction:
+   - Protected events (with `"-"` tag) may only be published by a connection
+     that has authenticated the same pubkey via NIP-42.
+
   NIP-59 restriction:
   - Gift-wrap events (`kind: 1059`) must include at least one valid recipient
   tag (`p`) before they can be stored.
@@ -25,35 +29,73 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
   alias Nostr.Relay.Pipeline.Stage
   alias Nostr.Relay.Repo
   alias Nostr.Relay.Store.Event, as: EventRecord
+  alias Nostr.Relay.Web.ConnectionState
   alias Nostr.Tag
 
   @behaviour Stage
 
   @impl Stage
   @spec call(Context.t(), keyword()) :: {:ok, Context.t()} | {:error, atom(), Context.t()}
-  def call(%Context{parsed_message: {:event, %Event{kind: 5} = event}} = context, _options) do
-    validate_delete_event_policy(event, context)
+  def call(%Context{parsed_message: {:event, %Event{} = event}} = context, _options) do
+    validate_event_policies(event, context)
   end
 
-  def call(%Context{parsed_message: {:event, %Event{kind: 10_59} = event}} = context, _options) do
-    validate_gift_wrap_policy(event, context)
-  end
-
-  def call(
-        %Context{parsed_message: {:event, _sub_id, %Event{kind: 5} = event}} = context,
-        _options
-      ) do
-    validate_delete_event_policy(event, context)
-  end
-
-  def call(
-        %Context{parsed_message: {:event, _sub_id, %Event{kind: 10_59} = event}} = context,
-        _options
-      ) do
-    validate_gift_wrap_policy(event, context)
+  def call(%Context{parsed_message: {:event, _sub_id, %Event{} = event}} = context, _options) do
+    validate_event_policies(event, context)
   end
 
   def call(%Context{} = context, _options), do: {:ok, context}
+
+  defp validate_event_policies(%Event{} = event, %Context{} = context) do
+    case validate_protected_event_policy(event, context) do
+      {:ok, context} -> validate_event_policies_after_protected(event, context)
+      error -> error
+    end
+  end
+
+  defp validate_event_policies_after_protected(%Event{} = event, %Context{} = context) do
+    case maybe_validate_delete_event_policy(event, context) do
+      {:ok, context} -> maybe_validate_gift_wrap_policy(event, context)
+      error -> error
+    end
+  end
+
+  defp validate_protected_event_policy(
+         %Event{id: event_id, pubkey: event_pubkey, tags: tags},
+         %Context{connection_state: %ConnectionState{} = state} = context
+       )
+       when is_binary(event_pubkey) and is_list(tags) do
+    if protected_event?(tags) and not ConnectionState.pubkey_authenticated?(state, event_pubkey) do
+      context =
+        context
+        |> Context.add_frame(
+          ok_frame(
+            event_id,
+            false,
+            "auth-required: protected event requires matching authenticated pubkey"
+          )
+        )
+        |> Context.set_error(:nip70_protected_event_unauthorized)
+
+      {:error, :nip70_protected_event_unauthorized, context}
+    else
+      {:ok, context}
+    end
+  end
+
+  defp validate_protected_event_policy(_event, context), do: {:ok, context}
+
+  defp maybe_validate_delete_event_policy(%Event{kind: 5} = event, context) do
+    validate_delete_event_policy(event, context)
+  end
+
+  defp maybe_validate_delete_event_policy(_event, context), do: {:ok, context}
+
+  defp maybe_validate_gift_wrap_policy(%Event{kind: 10_59} = event, context) do
+    validate_gift_wrap_policy(event, context)
+  end
+
+  defp maybe_validate_gift_wrap_policy(_event, context), do: {:ok, context}
 
   defp validate_delete_event_policy(
          %Event{pubkey: signer_pubkey, id: event_id, tags: tags},
@@ -116,6 +158,16 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
   end
 
   defp valid_pubkey?(_), do: false
+
+  defp protected_event?(tags) when is_list(tags) do
+    Enum.any?(tags, &protected_tag?/1)
+  end
+
+  defp protected_event?(_tags), do: false
+
+  defp protected_tag?(%Tag{type: :-}), do: true
+  defp protected_tag?(%Tag{type: "-"}), do: true
+  defp protected_tag?(_tag), do: false
 
   defp unauthorized_deletion_target?(tags, signer_pubkey) when is_list(tags) do
     unauthorized_event_id_target?(tags, signer_pubkey) or

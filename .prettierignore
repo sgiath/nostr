@@ -1,6 +1,7 @@
 # submodules
 nak/
 nips/
+relay-tester/
 
 # generated folders
 **/doc/

@@ -38,6 +38,14 @@ defmodule Nostr.Relay.Web.RelayInfo do
   end
 
   defp supported_nips(current, nip29) when is_list(current) and is_list(nip29) do
+    current
+    |> ensure_nip70()
+    |> maybe_include_nip29(nip29)
+  end
+
+  defp ensure_nip70(nips) when is_list(nips), do: Enum.uniq(nips ++ [70])
+
+  defp maybe_include_nip29(current, nip29) do
     if Keyword.get(nip29, :enabled, false) do
       Enum.uniq(current ++ [29])
     else

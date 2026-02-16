@@ -66,7 +66,9 @@ defmodule Nostr.Relay.Pipeline.Stages.GroupPolicyValidatorTest do
   end
 
   defp build_context(parsed_message) do
-    payload = Message.serialize(Message.notice("noop"))
+    payload =
+      Message.notice("noop")
+      |> Message.serialize()
 
     Context.new(payload, ConnectionState.new())
     |> Context.with_parsed_message(parsed_message)

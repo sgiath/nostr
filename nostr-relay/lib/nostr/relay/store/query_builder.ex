@@ -304,9 +304,8 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   defp record_expired?(_record, _now), do: false
 
   defp expired_expiration_tag?(value, now) do
-    with {:ok, timestamp} <- parse_expiration_timestamp(value) do
-      timestamp <= now
-    else
+    case parse_expiration_timestamp(value) do
+      {:ok, timestamp} -> timestamp <= now
       _ -> false
     end
   end
@@ -324,7 +323,10 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   end
 
   defp parse_expiration_timestamp(value) when is_binary(value) do
-    case Integer.parse(String.trim(value)) do
+    value
+    |> String.trim()
+    |> Integer.parse()
+    |> case do
       {timestamp, ""} -> {:ok, timestamp}
       _ -> :error
     end
@@ -354,45 +356,50 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     |> Enum.uniq()
   end
 
+  defp deletion_scope(pubkeys) when pubkeys == [] do
+    empty_deletion_scope()
+  end
+
   defp deletion_scope(pubkeys) do
-    if pubkeys == [] do
-      %{event_id_rules: %{}, address_rules: %{}}
-    else
-      now = DateTime.to_unix(DateTime.utc_now())
+    now = DateTime.to_unix(DateTime.utc_now())
 
-      deletion_event_records =
-        deletion_events_for_pubkeys(pubkeys)
-        |> Enum.reject(&record_expired?(&1, now))
+    pubkeys
+    |> deletion_events_for_pubkeys()
+    |> Enum.reject(&record_expired?(&1, now))
+    |> build_deletion_scope()
+  end
 
-      if deletion_event_records == [] do
-        %{event_id_rules: %{}, address_rules: %{}}
-      else
-        tags_by_deletion =
-          deletion_event_records
-          |> Enum.map(& &1.event_id)
-          |> fetch_deletion_tag_index()
+  defp empty_deletion_scope do
+    %{event_id_rules: %{}, address_rules: %{}}
+  end
 
-        Enum.reduce(deletion_event_records, %{event_id_rules: %{}, address_rules: %{}}, fn
-          %EventRecord{
-            event_id: deletion_id,
-            pubkey: deletion_pubkey,
-            created_at: deletion_created_at
-          },
-          scope ->
-            tags = Map.get(tags_by_deletion, deletion_id, %{})
-            kind_filter = parse_kind_filter(Map.get(tags, "k", []))
+  defp build_deletion_scope([]), do: empty_deletion_scope()
 
-            scope
-            |> add_event_id_deletions(deletion_pubkey, Map.get(tags, "e", []), kind_filter)
-            |> add_address_deletions(
-              deletion_pubkey,
-              Map.get(tags, "a", []),
-              kind_filter,
-              deletion_created_at
-            )
-        end)
-      end
-    end
+  defp build_deletion_scope(deletion_event_records) do
+    tags_by_deletion =
+      deletion_event_records
+      |> Enum.map(& &1.event_id)
+      |> fetch_deletion_tag_index()
+
+    Enum.reduce(deletion_event_records, empty_deletion_scope(), fn
+      %EventRecord{
+        event_id: deletion_id,
+        pubkey: deletion_pubkey,
+        created_at: deletion_created_at
+      },
+      scope ->
+        tags = Map.get(tags_by_deletion, deletion_id, %{})
+        kind_filter = parse_kind_filter(Map.get(tags, "k", []))
+
+        scope
+        |> add_event_id_deletions(deletion_pubkey, Map.get(tags, "e", []), kind_filter)
+        |> add_address_deletions(
+          deletion_pubkey,
+          Map.get(tags, "a", []),
+          kind_filter,
+          deletion_created_at
+        )
+    end)
   end
 
   defp deletion_events_for_pubkeys(pubkeys) do
@@ -477,22 +484,12 @@ defmodule Nostr.Relay.Store.QueryBuilder do
 
   # Coordinate format: kind:pubkey:d-tag
   defp parse_address_coord(value, deletion_pubkey) when is_binary(value) do
-    case String.split(value, ":", parts: 3) do
-      [kind_value, pubkey, d_tag] ->
-        case parse_kind_integer(kind_value) do
-          kind when is_integer(kind) ->
-            if pubkey == deletion_pubkey do
-              {:ok, {deletion_pubkey, kind, d_tag}}
-            else
-              {:ignore, :invalid}
-            end
-
-          _ ->
-            {:ignore, :invalid}
-        end
-
-      _ ->
-        {:ignore, :invalid}
+    with [kind_value, pubkey, d_tag] <- String.split(value, ":", parts: 3),
+         kind when is_integer(kind) <- parse_kind_integer(kind_value),
+         true <- pubkey == deletion_pubkey do
+      {:ok, {deletion_pubkey, kind, d_tag}}
+    else
+      _ -> {:ignore, :invalid}
     end
   end
 
@@ -608,19 +605,14 @@ defmodule Nostr.Relay.Store.QueryBuilder do
       records
       |> Enum.reduce(%{}, fn record, groups ->
         key = replacement_group_key(record, d_tags)
-
-        case Map.get(groups, key) do
-          nil ->
-            Map.put(groups, key, record)
-
-          existing_record ->
-            if newer_event?(record, existing_record),
-              do: Map.put(groups, key, record),
-              else: groups
-        end
+        Map.update(groups, key, record, &newest_record(record, &1))
       end)
       |> Map.values()
     end
+  end
+
+  defp newest_record(record, existing_record) do
+    if newer_event?(record, existing_record), do: record, else: existing_record
   end
 
   defp kind_41_records?(records) when is_list(records) do
@@ -729,18 +721,23 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   end
 
   defp ids_only_filter?(%Filter{} = filter) do
-    filter.ids not in [nil, []] and
-      filter.authors in [nil, []] and
-      filter.kinds in [nil, []] and
-      filter."#e" in [nil, []] and
-      filter."#p" in [nil, []] and
-      filter."#a" in [nil, []] and
-      filter."#d" in [nil, []] and
-      filter.since == nil and
-      filter.until == nil and
-      filter.search in [nil, ""] and
+    tag_filters = [filter."#e", filter."#p", filter."#a", filter."#d"]
+
+    populated_ids?(filter.ids) and
+      blank_list?(filter.authors) and
+      blank_list?(filter.kinds) and
+      Enum.all?(tag_filters, &blank_list?/1) and
+      is_nil(filter.since) and
+      is_nil(filter.until) and
+      blank_search?(filter.search) and
       tags_empty?(filter.tags)
   end
+
+  defp populated_ids?(ids), do: not blank_list?(ids)
+
+  defp blank_list?(value), do: value in [nil, []]
+
+  defp blank_search?(value), do: value in [nil, ""]
 
   defp tags_empty?(nil), do: true
   defp tags_empty?(tags), do: tags == %{}
@@ -861,19 +858,7 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   defp apply_group_visibility_filter(records, opts) when is_list(records) and is_list(opts) do
     case Keyword.fetch(opts, :group_viewer_pubkeys) do
       {:ok, viewer_pubkeys} when is_list(viewer_pubkeys) ->
-        Enum.filter(records, fn record ->
-          case decode_record_event(record) do
-            %Event{} = event ->
-              GroupVisibility.visible?(
-                event,
-                viewer_pubkeys,
-                Application.get_env(:nostr_relay, :nip29, [])
-              )
-
-            _ ->
-              false
-          end
-        end)
+        Enum.filter(records, &group_record_visible?(&1, viewer_pubkeys))
 
       {:ok, viewer_pubkey} when is_binary(viewer_pubkey) ->
         apply_group_visibility_filter(records, group_viewer_pubkeys: [viewer_pubkey])
@@ -884,6 +869,20 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   end
 
   defp apply_group_visibility_filter(records, _opts), do: records
+
+  defp group_record_visible?(record, viewer_pubkeys) do
+    case decode_record_event(record) do
+      %Event{} = event ->
+        GroupVisibility.visible?(
+          event,
+          viewer_pubkeys,
+          Application.get_env(:nostr_relay, :nip29, [])
+        )
+
+      _ ->
+        false
+    end
+  end
 
   defp decode_record_event(%EventRecord{raw_json: raw_json}) when is_binary(raw_json) do
     case JSON.decode(raw_json) do

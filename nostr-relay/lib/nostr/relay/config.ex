@@ -11,7 +11,7 @@ defmodule Nostr.Relay.Config do
 
   require Logger
 
-  @relay_info_keys [:name, :description, :pubkey, :contact, :url]
+  @relay_info_keys [:name, :description, :pubkey, :contact, :url, :supported_nips]
   @relay_identity_keys [:self_pub, :self_sec]
   @limit_keys [:max_subscriptions, :max_filters, :max_limit, :min_prefix_length]
   @auth_keys [:required, :mode, :timeout_seconds, :whitelist, :denylist]
@@ -24,6 +24,16 @@ defmodule Nostr.Relay.Config do
     :joins,
     :roles
   ]
+  @capability_names %{
+    "put_user" => :put_user,
+    "remove_user" => :remove_user,
+    "edit_metadata" => :edit_metadata,
+    "delete_event" => :delete_event,
+    "create_invite" => :create_invite,
+    "delete_group" => :delete_group,
+    "create_group" => :create_group,
+    "moderate" => :moderate
+  }
 
   @spec load!() :: :ok
   def load! do
@@ -77,12 +87,31 @@ defmodule Nostr.Relay.Config do
     overrides =
       relay
       |> Map.take(@relay_info_keys)
+      |> normalize_relay_info()
       |> Enum.to_list()
 
     Application.put_env(:nostr_relay, :relay_info, Keyword.merge(current, overrides))
   end
 
   defp merge_relay_info(_toml), do: :ok
+
+  defp normalize_relay_info(%{supported_nips: supported_nips} = relay)
+       when is_list(supported_nips) do
+    Map.put(relay, :supported_nips, normalize_supported_nips(supported_nips))
+  end
+
+  defp normalize_relay_info(%{supported_nips: _invalid} = relay) do
+    Map.delete(relay, :supported_nips)
+  end
+
+  defp normalize_relay_info(relay), do: relay
+
+  defp normalize_supported_nips(supported_nips) when is_list(supported_nips) do
+    supported_nips
+    |> Enum.filter(&(is_integer(&1) and &1 >= 0))
+    |> Enum.uniq()
+    |> Enum.sort()
+  end
 
   defp merge_relay_identity(%{relay: relay}) when is_map(relay) do
     current = Application.get_env(:nostr_relay, :relay_identity, [])
@@ -220,20 +249,16 @@ defmodule Nostr.Relay.Config do
   defp normalize_capability(capability) when is_atom(capability), do: capability
 
   defp normalize_capability(capability) when is_binary(capability) do
-    case String.trim(capability) do
-      "put_user" -> :put_user
-      "remove_user" -> :remove_user
-      "edit_metadata" -> :edit_metadata
-      "delete_event" -> :delete_event
-      "create_invite" -> :create_invite
-      "delete_group" -> :delete_group
-      "create_group" -> :create_group
-      "moderate" -> :moderate
-      _ -> :unknown
-    end
+    capability
+    |> String.trim()
+    |> normalize_capability_name()
   end
 
   defp normalize_capability(_capability), do: :unknown
+
+  defp normalize_capability_name(capability_name) do
+    Map.get(@capability_names, capability_name, :unknown)
+  end
 
   defp normalize_auth_mode(%{mode: mode} = auth) when is_binary(mode) do
     Map.put(auth, :mode, String.to_existing_atom(mode))

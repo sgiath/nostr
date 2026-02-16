@@ -288,19 +288,9 @@ defmodule Nostr.Relay.Groups.Projection do
     tags
     |> Enum.filter(&(&1.type == :p and is_binary(&1.data)))
     |> Enum.each(fn %Tag{data: pubkey, info: roles} ->
-      Enum.each(List.wrap(roles), fn role ->
-        if is_binary(role) and role != "" do
-          %GroupRole{}
-          |> GroupRole.changeset(%{
-            group_id: group_id,
-            pubkey: pubkey,
-            role: role,
-            last_event_id: event.id,
-            last_event_created_at: unix(event)
-          })
-          |> Repo.insert!()
-        end
-      end)
+      roles
+      |> List.wrap()
+      |> Enum.each(&insert_role(group_id, pubkey, &1, event))
     end)
 
     :ok
@@ -340,6 +330,21 @@ defmodule Nostr.Relay.Groups.Projection do
 
   defp unix(%Event{created_at: %DateTime{} = created_at}), do: DateTime.to_unix(created_at)
   defp unix(_event), do: nil
+
+  defp insert_role(group_id, pubkey, role, %Event{} = event)
+       when is_binary(role) and role != "" do
+    %GroupRole{}
+    |> GroupRole.changeset(%{
+      group_id: group_id,
+      pubkey: pubkey,
+      role: role,
+      last_event_id: event.id,
+      last_event_created_at: unix(event)
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_role(_group_id, _pubkey, _role, _event), do: :ok
 
   defp to_ok({:ok, _record}), do: :ok
   defp to_ok({:error, _} = error), do: error

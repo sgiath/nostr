@@ -2,6 +2,4 @@
 name = "Override Name"
 software = "evil_relay"
 version = "9.9.9"
-
-[nips]
-supported = [1, 11, 42]
+supported_nips = [42, 11, 70, 42]

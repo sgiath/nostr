@@ -124,19 +124,27 @@ defmodule Nostr.Relay.Store do
     if Repo.get(EventRecord, event.id) do
       :duplicate
     else
-      Repo.transaction(fn ->
-        attrs = build_attrs(event, raw_json)
+      run_insert_transaction(event, raw_json)
+    end
+  end
 
-        case EventRecord.changeset(%EventRecord{}, attrs) |> Repo.insert() do
-          {:ok, _record} ->
-            insert_tags(event)
-            maybe_apply_group_projection(event)
+  defp run_insert_transaction(%Event{} = event, raw_json) do
+    Repo.transaction(fn ->
+      insert_record_with_tags(event, raw_json)
+    end)
+    |> normalize_transaction_result()
+  end
 
-          {:error, reason} ->
-            Repo.rollback(reason)
-        end
-      end)
-      |> normalize_transaction_result()
+  defp insert_record_with_tags(%Event{} = event, raw_json) do
+    attrs = build_attrs(event, raw_json)
+
+    case EventRecord.changeset(%EventRecord{}, attrs) |> Repo.insert() do
+      {:ok, _record} ->
+        insert_tags(event)
+        maybe_apply_group_projection(event)
+
+      {:error, reason} ->
+        Repo.rollback(reason)
     end
   end
 

@@ -240,7 +240,10 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
           |> ConnectionState.authenticate_pubkey(@author_one)
           |> ConnectionState.add_subscription("sub-1", [filter])
 
-        expected_frame = event |> Message.event("sub-1") |> Message.serialize()
+        expected_frame =
+          event
+          |> Message.event("sub-1")
+          |> Message.serialize()
 
         assert {:push, [{:text, ^expected_frame}], ^state} =
                  SocketHandler.handle_info({:new_event, event}, state)
@@ -271,7 +274,10 @@ defmodule Nostr.Relay.Web.SocketHandlerTest do
           |> ConnectionState.authenticate_pubkey(@author_two)
           |> ConnectionState.add_subscription("sub-1", [filter])
 
-        expected_frame = event |> Message.event("sub-1") |> Message.serialize()
+        expected_frame =
+          event
+          |> Message.event("sub-1")
+          |> Message.serialize()
 
         assert {:push, [{:text, ^expected_frame}], ^state} =
                  SocketHandler.handle_info({:new_event, event}, state)

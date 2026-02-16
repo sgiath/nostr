@@ -9,46 +9,69 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageValidatorTest do
 
   describe "MessageValidator.call/2" do
     test "accepts supported inbound message shapes" do
-      assert {:ok, _context} = MessageValidator.call(build_context({:event, valid_event()}), [])
+      assert {:ok, _context} =
+               {:event, valid_event()}
+               |> build_context()
+               |> MessageValidator.call([])
 
       assert {:ok, _context} =
-               MessageValidator.call(build_context({:event, "sub-id", valid_event()}), [])
+               {:event, "sub-id", valid_event()}
+               |> build_context()
+               |> MessageValidator.call([])
 
       assert {:ok, _context} =
-               MessageValidator.call(build_context({:req, "sub-id", [%Filter{}, %Filter{}]}), [])
+               {:req, "sub-id", [%Filter{}, %Filter{}]}
+               |> build_context()
+               |> MessageValidator.call([])
 
       assert {:ok, _context} =
-               MessageValidator.call(build_context({:count, "sub-id", [%Filter{}]}), [])
+               {:count, "sub-id", [%Filter{}]}
+               |> build_context()
+               |> MessageValidator.call([])
 
-      assert {:ok, _context} = MessageValidator.call(build_context({:close, "sub-id"}), [])
+      assert {:ok, _context} =
+               {:close, "sub-id"}
+               |> build_context()
+               |> MessageValidator.call([])
     end
 
     test "rejects unsupported message forms" do
       assert {:error, :unsupported_message_type, %Context{error: :unsupported_message_type}} =
-               MessageValidator.call(build_context({:notice, "noop"}), [])
+               {:notice, "noop"}
+               |> build_context()
+               |> MessageValidator.call([])
 
       assert {:error, :unsupported_message_type, %Context{error: :unsupported_message_type}} =
-               MessageValidator.call(build_context({:event, %{id: "bad"}}), [])
+               {:event, %{id: "bad"}}
+               |> build_context()
+               |> MessageValidator.call([])
 
       assert {:error, :unsupported_message_type, %Context{error: :unsupported_message_type}} =
-               MessageValidator.call(build_context({:req, "sub", ["bad-filter"]}), [])
+               {:req, "sub", ["bad-filter"]}
+               |> build_context()
+               |> MessageValidator.call([])
 
       assert {:error, :unsupported_message_type, %Context{error: :unsupported_message_type}} =
-               MessageValidator.call(build_context({:count, "sub", %{count: 1}}), [])
+               {:count, "sub", %{count: 1}}
+               |> build_context()
+               |> MessageValidator.call([])
 
       assert {:error, :unsupported_message_type, %Context{error: :unsupported_message_type}} =
-               MessageValidator.call(build_context({:close, :not_binary}), [])
+               {:close, :not_binary}
+               |> build_context()
+               |> MessageValidator.call([])
     end
 
     test "returns error for unsupported list cardinality and contents" do
       assert {:error, :unsupported_message_type, %Context{error: :unsupported_message_type}} =
-               MessageValidator.call(build_context({:req, "sub", []}), [])
+               {:req, "sub", []}
+               |> build_context()
+               |> MessageValidator.call([])
 
       assert {:error, :unsupported_message_type, %Context{error: :unsupported_message_type}} =
-               MessageValidator.call(
-                 build_context({:count, "sub", ["bad-filter", %Filter{}, :also_bad]}),
-                 []
-               )
+               {:count, "sub", ["bad-filter", %Filter{}, :also_bad]}
+               |> build_context()
+               |> MessageValidator.call([])
     end
   end
 

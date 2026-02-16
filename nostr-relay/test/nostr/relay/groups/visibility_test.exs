@@ -28,7 +28,11 @@ defmodule Nostr.Relay.Groups.VisibilityTest do
   end
 
   test "hides private group events from non-members" do
-    Repo.insert!(Group.changeset(%Group{}, %{group_id: "group_1", managed: true, private: true}))
+    group_attrs = %{group_id: "group_1", managed: true, private: true}
+
+    %Group{}
+    |> Group.changeset(group_attrs)
+    |> Repo.insert!()
 
     event =
       Event.create(1, tags: [Tag.create(:h, "group_1")], content: "hello")
@@ -43,15 +47,21 @@ defmodule Nostr.Relay.Groups.VisibilityTest do
       |> Event.sign(@seckey)
       |> Map.fetch!(:pubkey)
 
-    Repo.insert!(Group.changeset(%Group{}, %{group_id: "group_1", managed: true, private: true}))
+    group_attrs = %{group_id: "group_1", managed: true, private: true}
 
-    Repo.insert!(
-      GroupMember.changeset(%GroupMember{}, %{
-        group_id: "group_1",
-        pubkey: pubkey,
-        status: "member"
-      })
-    )
+    %Group{}
+    |> Group.changeset(group_attrs)
+    |> Repo.insert!()
+
+    member_attrs = %{
+      group_id: "group_1",
+      pubkey: pubkey,
+      status: "member"
+    }
+
+    %GroupMember{}
+    |> GroupMember.changeset(member_attrs)
+    |> Repo.insert!()
 
     event =
       Event.create(1, tags: [Tag.create(:h, "group_1")], content: "hello")
