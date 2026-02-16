@@ -13,6 +13,7 @@ defmodule Nostr.Relay.Application do
     children =
       [
         Nostr.Relay.Repo,
+        {Phoenix.PubSub, name: Nostr.Relay.PubSub},
         {Bandit, server_config}
       ]
 

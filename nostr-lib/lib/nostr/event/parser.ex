@@ -83,9 +83,10 @@ defmodule Nostr.Event.Parser do
   """
   @spec parse(String.t() | map()) :: Nostr.Event.t() | {:error, String.t(), term()}
   def parse(event) when is_binary(event) do
-    case JSON.decode!(event) do
-      {:ok, event} -> parse(event)
+    case JSON.decode(event) do
+      {:ok, decoded} -> parse(decoded)
       {:error, %JSON.DecodeError{}} -> {:error, "Cannot decode event", event}
+      {:error, _} -> {:error, "Cannot decode event", event}
     end
   end
 
@@ -94,12 +95,25 @@ defmodule Nostr.Event.Parser do
       id: event["id"],
       pubkey: event["pubkey"],
       kind: event["kind"],
-      tags: Enum.map(event["tags"], &Nostr.Tag.parse/1),
-      created_at: DateTime.from_unix!(event["created_at"]),
+      tags:
+        event["tags"]
+        |> Enum.map(&Nostr.Tag.parse/1)
+        |> Enum.reject(&is_nil/1),
+      created_at: safe_from_unix(event["created_at"]),
       content: event["content"],
       sig: event["sig"]
     }
   end
+
+  defp safe_from_unix(unix) when is_integer(unix) do
+    case DateTime.from_unix(unix) do
+      {:ok, dt} -> dt
+      {:error, _} -> nil
+    end
+  end
+
+  defp safe_from_unix(unix) when is_float(unix), do: safe_from_unix(trunc(unix))
+  defp safe_from_unix(_), do: nil
 
   @doc """
   Converts a generic `Nostr.Event` to a type-specific struct based on event kind.

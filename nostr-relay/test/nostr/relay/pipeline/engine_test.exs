@@ -2,11 +2,18 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
   use Nostr.Relay.DataCase, async: false
 
   alias Nostr.Event
+  alias Nostr.Filter
   alias Nostr.Message
+  alias Nostr.Tag
   alias Nostr.Relay.Pipeline.Context
   alias Nostr.Relay.Pipeline.Engine
   alias Nostr.Relay.Pipeline.Stage
+  alias Nostr.Relay.Repo
+  alias Nostr.Relay.Store
+  alias Nostr.Relay.Store.Event, as: EventRecord
   alias Nostr.Relay.Web.ConnectionState
+
+  @seckey "1111111111111111111111111111111111111111111111111111111111111111"
 
   describe "Engine.run/3" do
     test "returns NOTICE for invalid JSON payloads" do
@@ -41,6 +48,64 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
              } = Engine.run(payload, state)
     end
 
+    test "returns NOTICE for malformed JSON escapes" do
+      state = ConnectionState.new()
+
+      expected =
+        Message.notice("invalid message: unsupported JSON escape")
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(~S(["EVENT","value\q"]), state)
+    end
+
+    test "returns NOTICE for unsupported JSON slash escape" do
+      state = ConnectionState.new()
+
+      expected =
+        Message.notice("invalid message: unsupported JSON escape")
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(~S(["CLOSE","value\/"]), state)
+    end
+
+    test "returns NOTICE for unicode control escapes" do
+      state = ConnectionState.new()
+
+      expected =
+        Message.notice("invalid message: unsupported JSON escape")
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(~S(["CLOSE","value\u0000"]), state)
+    end
+
+    test "returns NOTICE for unescaped control characters in JSON string" do
+      state = ConnectionState.new()
+
+      expected =
+        Message.notice("invalid message: unsupported JSON literal control")
+        |> Message.serialize()
+
+      payload = "[\"CLOSE\",\"close" <> <<1>> <> "\"]"
+
+      assert {
+               :push,
+               [{:text, ^expected}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(payload, state)
+    end
+
     test "accepts valid EVENT messages through default stages" do
       state = ConnectionState.new()
       event = valid_event()
@@ -51,7 +116,7 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
         |> Message.serialize()
 
       expected =
-        Message.ok(event.id, true, "event accepted")
+        Message.ok(event.id, true, "")
         |> Message.serialize()
 
       assert {
@@ -59,6 +124,183 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
                [{:text, ^expected}],
                %ConnectionState{messages: 1}
              } = Engine.run(payload, state)
+    end
+
+    test "returns OK false for stale replaceable events but keeps event storage" do
+      state = ConnectionState.new()
+
+      newer =
+        0
+        |> Event.create(content: "newest", created_at: ~U[2024-06-16 12:00:00Z])
+        |> Event.sign(@seckey)
+
+      older =
+        0
+        |> Event.create(content: "older", created_at: ~U[2024-06-15 12:00:00Z])
+        |> Event.sign(@seckey)
+
+      newer_payload = Message.create_event(newer) |> Message.serialize()
+      older_payload = Message.create_event(older) |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, new_ok_json}],
+               state_after_newer
+             } = Engine.run(newer_payload, state)
+
+      assert ["OK", returned_newer_id, true, ""] = JSON.decode!(new_ok_json)
+      assert returned_newer_id == newer.id
+
+      assert {
+               :push,
+               [{:text, old_ok_json}],
+               _state_after_older
+             } = Engine.run(older_payload, state_after_newer)
+
+      assert ["OK", returned_older_id, false, "rejected: stale replacement event"] =
+               JSON.decode!(old_ok_json)
+
+      assert returned_older_id == older.id
+
+      assert {:ok, events} = Store.query_events([%Filter{kinds: [0]}], [])
+      assert Enum.map(events, & &1.id) == [newer.id]
+
+      assert Repo.all(
+               from(record in EventRecord, where: record.kind == 0, select: record.event_id)
+             )
+             |> Enum.sort() == [newer.id, older.id] |> Enum.sort()
+    end
+
+    test "returns OK false for stale parameterized replaceable events but keeps event storage" do
+      state = ConnectionState.new()
+      tag = Tag.create(:d, "profile-v1")
+
+      newer =
+        30_000
+        |> Event.create(content: "newest", created_at: ~U[2024-06-16 12:00:00Z], tags: [tag])
+        |> Event.sign(@seckey)
+
+      older =
+        30_000
+        |> Event.create(content: "older", created_at: ~U[2024-06-15 12:00:00Z], tags: [tag])
+        |> Event.sign(@seckey)
+
+      newer_payload = Message.create_event(newer) |> Message.serialize()
+      older_payload = Message.create_event(older) |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, new_ok_json}],
+               state_after_newer
+             } = Engine.run(newer_payload, state)
+
+      assert ["OK", returned_newer_id, true, ""] = JSON.decode!(new_ok_json)
+      assert returned_newer_id == newer.id
+
+      assert {
+               :push,
+               [{:text, old_ok_json}],
+               _state_after_older
+             } = Engine.run(older_payload, state_after_newer)
+
+      assert ["OK", returned_older_id, false, "rejected: stale replacement event"] =
+               JSON.decode!(old_ok_json)
+
+      assert returned_older_id == older.id
+
+      assert {:ok, events} = Store.query_events([%Filter{kinds: [30_000]}], [])
+      assert Enum.map(events, & &1.id) == [newer.id]
+
+      assert Repo.all(
+               from(record in EventRecord, where: record.kind == 30_000, select: record.event_id)
+             )
+             |> Enum.sort() == [newer.id, older.id] |> Enum.sort()
+    end
+
+    test "returns OK false when an already stored older replaceable event is retried" do
+      state = ConnectionState.new()
+
+      older =
+        0
+        |> Event.create(content: "older", created_at: ~U[2024-06-15 12:00:00Z])
+        |> Event.sign(@seckey)
+
+      newer =
+        0
+        |> Event.create(content: "newer", created_at: ~U[2024-06-16 12:00:00Z])
+        |> Event.sign(@seckey)
+
+      older_id = older.id
+      newer_id = newer.id
+
+      older_payload = Message.create_event(older) |> Message.serialize()
+      newer_payload = Message.create_event(newer) |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, first_old_ok_json}],
+               state_after_first_old
+             } = Engine.run(older_payload, state)
+
+      assert ["OK", ^older_id, true, ""] = JSON.decode!(first_old_ok_json)
+
+      assert {
+               :push,
+               [{:text, newer_ok_json}],
+               state_after_newer
+             } = Engine.run(newer_payload, state_after_first_old)
+
+      assert ["OK", ^newer_id, true, ""] = JSON.decode!(newer_ok_json)
+
+      assert {
+               :push,
+               [{:text, retried_old_ok_json}],
+               _state_after_retried_old
+             } = Engine.run(older_payload, state_after_newer)
+
+      assert ["OK", ^older_id, false, "rejected: stale replacement event"] =
+               JSON.decode!(retried_old_ok_json)
+
+      assert {:ok, events} = Store.query_events([%Filter{kinds: [0]}], [])
+      assert Enum.map(events, & &1.id) == [newer.id]
+    end
+
+    test "preserves duplicate: exact-id behavior for replaceable events" do
+      state = ConnectionState.new()
+
+      event =
+        0
+        |> Event.create(content: "stable", created_at: ~U[2024-06-16 12:00:00Z])
+        |> Event.sign(@seckey)
+
+      payload = Message.create_event(event) |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, first_ok_json}],
+               state_after_first
+             } = Engine.run(payload, state)
+
+      assert ["OK", returned_event_id, true, ""] = JSON.decode!(first_ok_json)
+      assert returned_event_id == event.id
+
+      assert {
+               :push,
+               [{:text, dup_ok_json}],
+               _state_after_duplicate
+             } = Engine.run(payload, state_after_first)
+
+      event_id = event.id
+
+      assert ["OK", ^event_id, true, "duplicate: already have this event"] =
+               JSON.decode!(dup_ok_json)
+
+      assert Repo.aggregate(
+               from(record in EventRecord, where: record.event_id == ^event.id),
+               :count,
+               :event_id
+             ) ==
+               1
     end
 
     test "returns invalid pipeline result when a stage returns invalid output" do
@@ -73,6 +315,146 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
                [{:text, ^expected}],
                %ConnectionState{messages: 1}
              } = Engine.run("{}", state, stages: [__MODULE__.InvalidResultStage])
+    end
+  end
+
+  describe "AUTH end-to-end pipeline" do
+    setup do
+      original_auth = Application.get_env(:nostr_relay, :auth)
+      original_relay_info = Application.get_env(:nostr_relay, :relay_info)
+
+      on_exit(fn ->
+        Application.put_env(:nostr_relay, :auth, original_auth)
+        Application.put_env(:nostr_relay, :relay_info, original_relay_info)
+      end)
+
+      :ok
+    end
+
+    test "valid AUTH event passes through full pipeline and authenticates" do
+      challenge = "test-challenge-end-to-end"
+      set_relay_url("wss://relay.example.com")
+      set_auth_mode(:none)
+
+      state =
+        ConnectionState.new()
+        |> ConnectionState.with_challenge(challenge)
+
+      event = auth_event(challenge: challenge, relay: "wss://relay.example.com")
+      payload = JSON.encode!(["AUTH", event])
+
+      assert {:push, [{:text, ok_json}], %ConnectionState{} = result_state} =
+               Engine.run(payload, state)
+
+      assert ["OK", _event_id, true, ""] = JSON.decode!(ok_json)
+      assert ConnectionState.authenticated?(result_state)
+    end
+
+    test "AUTH event with wrong challenge is rejected through full pipeline" do
+      challenge = "correct-challenge"
+      set_relay_url("wss://relay.example.com")
+      set_auth_mode(:none)
+
+      state =
+        ConnectionState.new()
+        |> ConnectionState.with_challenge(challenge)
+
+      event = auth_event(challenge: "wrong-challenge", relay: "wss://relay.example.com")
+      payload = JSON.encode!(["AUTH", event])
+
+      assert {:push, [{:text, ok_json}], %ConnectionState{} = result_state} =
+               Engine.run(payload, state)
+
+      assert ["OK", _event_id, false, "auth-required: challenge mismatch"] =
+               JSON.decode!(ok_json)
+
+      refute ConnectionState.authenticated?(result_state)
+    end
+
+    test "AUTH event with wrong kind is rejected through full pipeline" do
+      challenge = "kind-check-challenge"
+      set_relay_url("wss://relay.example.com")
+      set_auth_mode(:none)
+
+      state =
+        ConnectionState.new()
+        |> ConnectionState.with_challenge(challenge)
+
+      # Build a kind-1 event with auth tags — wrong kind
+      wrong_kind_event =
+        1
+        |> Event.create(
+          tags: [
+            Nostr.Tag.create(:relay, "wss://relay.example.com"),
+            Nostr.Tag.create(:challenge, challenge)
+          ],
+          created_at: DateTime.utc_now()
+        )
+        |> Event.sign(@seckey)
+
+      payload = JSON.encode!(["AUTH", wrong_kind_event])
+
+      assert {:push, [{:text, ok_json}], %ConnectionState{} = result_state} =
+               Engine.run(payload, state)
+
+      assert ["OK", _event_id, false, "auth-required: invalid auth event kind"] =
+               JSON.decode!(ok_json)
+
+      refute ConnectionState.authenticated?(result_state)
+    end
+
+    test "AUTH enforcer rejects EVENT when auth required and not authenticated" do
+      state = ConnectionState.new(auth_required: true)
+      event = valid_event()
+
+      payload =
+        event
+        |> Message.create_event()
+        |> Message.serialize()
+
+      assert {:push, [{:text, ok_json}], %ConnectionState{}} = Engine.run(payload, state)
+
+      assert ["OK", _event_id, false, "auth-required:" <> _] = JSON.decode!(ok_json)
+    end
+
+    test "AUTH enforcer rejects REQ when auth required and not authenticated" do
+      state = ConnectionState.new(auth_required: true)
+
+      payload =
+        %Nostr.Filter{}
+        |> Message.request("sub-1")
+        |> Message.serialize()
+
+      assert {:push, [{:text, closed_json}], %ConnectionState{}} = Engine.run(payload, state)
+
+      assert ["CLOSED", "sub-1", "auth-required:" <> _] = JSON.decode!(closed_json)
+    end
+
+    test "full AUTH then EVENT flow succeeds through pipeline" do
+      challenge = "full-flow-challenge"
+      set_relay_url("wss://relay.example.com")
+      set_auth_mode(:none)
+
+      state =
+        ConnectionState.new(auth_required: true)
+        |> ConnectionState.with_challenge(challenge)
+
+      # Step 1: authenticate
+      auth = auth_event(challenge: challenge, relay: "wss://relay.example.com")
+      auth_payload = JSON.encode!(["AUTH", auth])
+
+      assert {:push, [{:text, ok_json}], authed_state} = Engine.run(auth_payload, state)
+      assert ["OK", _, true, ""] = JSON.decode!(ok_json)
+      assert ConnectionState.authenticated?(authed_state)
+
+      # Step 2: send EVENT — should succeed now
+      event = valid_event()
+      event_payload = Message.create_event(event) |> Message.serialize()
+
+      assert {:push, [{:text, event_ok}], _final_state} =
+               Engine.run(event_payload, authed_state)
+
+      assert ["OK", _, true, ""] = JSON.decode!(event_ok)
     end
   end
 
@@ -92,16 +474,34 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
   defp valid_event(opts) when is_list(opts) do
     created_at = Keyword.get(opts, :created_at, ~U[2024-01-01 00:00:00Z])
     kind = Keyword.get(opts, :kind, 1)
-
-    seckey =
-      Keyword.get(
-        opts,
-        :seckey,
-        "1111111111111111111111111111111111111111111111111111111111111111"
-      )
+    seckey = Keyword.get(opts, :seckey, @seckey)
 
     kind
     |> Event.create(content: "relay ack", created_at: created_at)
     |> Event.sign(seckey)
+  end
+
+  defp auth_event(opts) do
+    challenge = Keyword.fetch!(opts, :challenge)
+    relay = Keyword.fetch!(opts, :relay)
+
+    tags = [
+      Nostr.Tag.create(:relay, relay),
+      Nostr.Tag.create(:challenge, challenge)
+    ]
+
+    22_242
+    |> Event.create(tags: tags, created_at: DateTime.utc_now())
+    |> Event.sign(@seckey)
+  end
+
+  defp set_relay_url(url) do
+    info = Application.get_env(:nostr_relay, :relay_info, [])
+    Application.put_env(:nostr_relay, :relay_info, Keyword.put(info, :url, url))
+  end
+
+  defp set_auth_mode(mode) do
+    auth = Application.get_env(:nostr_relay, :auth, [])
+    Application.put_env(:nostr_relay, :auth, Keyword.put(auth, :mode, mode))
   end
 end

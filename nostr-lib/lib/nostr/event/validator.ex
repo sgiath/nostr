@@ -16,6 +16,11 @@ defmodule Nostr.Event.Validator do
   the Schnorr signature is valid for the given pubkey.
   """
   @spec valid?(Nostr.Event.t()) :: boolean()
+  def valid?(%Nostr.Event{created_at: nil}), do: false
+  def valid?(%Nostr.Event{id: nil}), do: false
+  def valid?(%Nostr.Event{sig: nil}), do: false
+  def valid?(%Nostr.Event{pubkey: nil}), do: false
+
   def valid?(%Nostr.Event{} = event) do
     valid_id?(event) and valid_sig?(event)
   end

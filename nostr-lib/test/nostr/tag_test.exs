@@ -5,6 +5,24 @@ defmodule Nostr.TagTest do
 
   alias Nostr.Tag
 
+  describe "create/1" do
+    test "creates a type-only tag with atom" do
+      tag = Tag.create(:test)
+
+      assert tag.type == :test
+      assert tag.data == nil
+      assert tag.info == []
+    end
+
+    test "creates a type-only tag with string (converts to atom)" do
+      tag = Tag.create("test")
+
+      assert tag.type == :test
+      assert tag.data == nil
+      assert tag.info == []
+    end
+  end
+
   describe "create/2" do
     test "creates a tag with type and data" do
       tag = Tag.create(:p, "pubkey123")
@@ -65,6 +83,18 @@ defmodule Nostr.TagTest do
       assert tag.data == "my-identifier"
       assert tag.info == []
     end
+
+    test "parses a single-element tag (NIP-01: one or more strings)" do
+      tag = Tag.parse(["test"])
+
+      assert tag.type == :test
+      assert tag.data == nil
+      assert tag.info == []
+    end
+
+    test "returns nil for empty list" do
+      assert Tag.parse([]) == nil
+    end
   end
 
   describe "JSON encoding" do
@@ -104,6 +134,28 @@ defmodule Nostr.TagTest do
 
       assert decoded["tags"] == [["p", "pubkey123"], ["e", "event-id"]]
       assert decoded["other"] == "value"
+    end
+
+    test "encodes a type-only tag as single-element array" do
+      tag = Tag.create(:test)
+
+      assert JSON.encode!(tag) == ~s(["test"])
+    end
+
+    test "round-trips single-element tag through JSON" do
+      original = ["test"]
+      tag = Tag.parse(original)
+      encoded = JSON.encode!(tag)
+
+      assert encoded == ~s(["test"])
+    end
+
+    test "distinguishes single-element from empty-data tag" do
+      type_only = Tag.parse(["test"])
+      empty_data = Tag.parse(["test", ""])
+
+      assert JSON.encode!(type_only) == ~s(["test"])
+      assert JSON.encode!(empty_data) == ~s(["test",""])
     end
 
     test "encodes tags within a Nostr.Event struct" do

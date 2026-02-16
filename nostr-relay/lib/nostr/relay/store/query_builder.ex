@@ -6,6 +6,7 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   alias Nostr.Filter
   alias Nostr.Relay.Repo
   alias Nostr.Relay.Store.Event, as: EventRecord
+  alias Nostr.Relay.Store.EventTag
 
   # --- Public API ---
 
@@ -16,7 +17,9 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     results =
       filters
       |> Enum.flat_map(&execute_single_filter/1)
-      |> deduplicate_and_sort()
+      |> deduplicate_records()
+      |> apply_replacement_collapse(filters)
+      |> sort_records(filters)
       |> apply_global_limit(filters)
 
     {:ok, results}
@@ -34,25 +37,55 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     end)
   end
 
+  # --- Count API ---
+
+  @spec count_events([Filter.t()]) :: {:ok, non_neg_integer()}
+  def count_events(filters) when is_list(filters) do
+    filters = if filters == [], do: [%Filter{}], else: filters
+
+    count =
+      filters
+      |> Enum.flat_map(&execute_single_filter/1)
+      |> deduplicate_records()
+      |> apply_replacement_collapse(filters)
+      |> Enum.count()
+
+    {:ok, count}
+  rescue
+    Exqlite.Error -> {:ok, 0}
+  end
+
   # --- Query building ---
 
   @spec build_single_filter_query(Filter.t()) :: Ecto.Query.t()
   def build_single_filter_query(%Filter{} = filter) do
+    filter
+    |> build_filter_base_query()
+    |> apply_ordering(filter.search)
+    |> apply_limit(filter.limit)
+  end
+
+  # --- Query building (internal) ---
+
+  defp build_filter_base_query(%Filter{} = filter) do
     EventRecord
+    |> apply_ephemeral_filter()
     |> apply_ids(filter.ids)
     |> apply_authors(filter.authors)
     |> apply_kinds(filter.kinds)
     |> apply_since(filter.since)
     |> apply_until(filter.until)
     |> apply_tag_filters(filter)
-    |> apply_ordering()
-    |> apply_limit(filter.limit)
+    |> apply_search(filter.search)
   end
 
   defp execute_single_filter(%Filter{} = filter) do
     filter
     |> build_single_filter_query()
     |> Repo.all()
+  rescue
+    # FTS5 MATCH errors from malformed search queries
+    Exqlite.Error -> []
   end
 
   # --- ids (exact + prefix matching) ---
@@ -143,30 +176,167 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     fixed ++ dynamic
   end
 
+  # --- search (NIP-50 FTS5) ---
+
+  defp apply_search(query, nil), do: query
+  defp apply_search(query, ""), do: query
+
+  defp apply_search(query, search) when is_binary(search) do
+    sanitized = sanitize_fts_query(search)
+
+    if sanitized == "" do
+      query
+    else
+      where(
+        query,
+        [e],
+        fragment(
+          "?.rowid IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)",
+          e,
+          ^sanitized
+        )
+      )
+    end
+  end
+
   # --- ordering ---
 
-  defp apply_ordering(query) do
+  # Search results: sort by FTS5 rank (lower = more relevant)
+  defp apply_ordering(query, search) when is_binary(search) and search != "" do
+    order_by(query, [e],
+      asc: fragment("(SELECT rank FROM events_fts WHERE events_fts.rowid = ?.rowid)", e)
+    )
+  end
+
+  defp apply_ordering(query, _search) do
     order_by(query, [e], desc: e.created_at, asc: e.event_id)
   end
 
   # --- limit ---
 
   defp apply_limit(query, nil), do: query
-  defp apply_limit(query, n) when is_integer(n) and n > 0, do: limit(query, ^n)
+  defp apply_limit(query, n) when is_integer(n) and n >= 0, do: limit(query, ^n)
   defp apply_limit(query, _), do: query
 
   # --- helpers ---
 
-  defp deduplicate_and_sort(records) do
+  defp apply_replacement_collapse(records, filters) do
+    if ids_only_filters?(filters) do
+      records
+    else
+      d_tags = fetch_parameterized_d_tags(records)
+
+      records
+      |> Enum.reduce(%{}, fn record, groups ->
+        key = replacement_group_key(record, d_tags)
+
+        case Map.get(groups, key) do
+          nil ->
+            Map.put(groups, key, record)
+
+          existing_record ->
+            if newer_event?(record, existing_record),
+              do: Map.put(groups, key, record),
+              else: groups
+        end
+      end)
+      |> Map.values()
+    end
+  end
+
+  defp replacement_group_key(%EventRecord{} = record, d_tags) do
+    case replacement_kind(record.kind) do
+      :replaceable ->
+        {:replaceable, record.pubkey, record.kind}
+
+      :parameterized ->
+        {:parameterized, record.pubkey, record.kind, Map.get(d_tags, record.event_id, "")}
+
+      :regular ->
+        {:regular, record.event_id}
+    end
+  end
+
+  defp replacement_kind(kind) when kind in [0, 3] or kind in 10_000..19_999, do: :replaceable
+
+  defp replacement_kind(kind) when kind in 30_000..39_999, do: :parameterized
+
+  defp replacement_kind(_kind), do: :regular
+
+  defp newer_event?(%EventRecord{} = candidate, %EventRecord{} = existing) do
+    candidate.created_at > existing.created_at or
+      (candidate.created_at == existing.created_at and candidate.event_id < existing.event_id)
+  end
+
+  defp fetch_parameterized_d_tags(records) do
     records
-    |> Enum.uniq_by(& &1.event_id)
-    |> Enum.sort_by(&{-&1.created_at, &1.event_id})
+    |> Enum.filter(&parameterized_replaceable_kind?/1)
+    |> Enum.map(& &1.event_id)
+    |> Enum.uniq()
+    |> fetch_d_tags()
+  end
+
+  defp fetch_d_tags([]), do: %{}
+
+  defp fetch_d_tags(event_ids) when is_list(event_ids) do
+    from(t in EventTag,
+      where: t.event_id in ^event_ids and t.tag_name == "d",
+      select: {t.event_id, t.tag_value}
+    )
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn {event_id, tag_value}, acc ->
+      Map.put_new(acc, event_id, tag_value)
+    end)
+  end
+
+  defp parameterized_replaceable_kind?(%EventRecord{kind: kind}) when kind in 30_000..39_999,
+    do: true
+
+  defp parameterized_replaceable_kind?(_record), do: false
+
+  defp ids_only_filters?(filters) do
+    Enum.all?(filters, &ids_only_filter?/1)
+  end
+
+  defp ids_only_filter?(%Filter{} = filter) do
+    filter.ids not in [nil, []] and
+      filter.authors in [nil, []] and
+      filter.kinds in [nil, []] and
+      filter."#e" in [nil, []] and
+      filter."#p" in [nil, []] and
+      filter."#a" in [nil, []] and
+      filter."#d" in [nil, []] and
+      filter.since == nil and
+      filter.until == nil and
+      filter.search in [nil, ""] and
+      tags_empty?(filter.tags)
+  end
+
+  defp tags_empty?(nil), do: true
+  defp tags_empty?(tags), do: tags == %{}
+
+  defp deduplicate_records(records) do
+    Enum.uniq_by(records, & &1.event_id)
+  end
+
+  # When all filters are search queries, preserve SQL relevance ordering.
+  # Otherwise use created_at DESC then event_id ASC.
+  defp sort_records(records, filters) do
+    if all_search_filters?(filters) do
+      records
+    else
+      Enum.sort_by(records, &{-&1.created_at, &1.event_id})
+    end
+  end
+
+  defp all_search_filters?(filters) do
+    Enum.all?(filters, fn f -> is_binary(f.search) and f.search != "" end)
   end
 
   defp apply_global_limit(records, filters) do
     case global_limit(filters) do
       nil -> records
-      n when is_integer(n) and n > 0 -> Enum.take(records, n)
+      n when is_integer(n) and n >= 0 -> Enum.take(records, n)
       _ -> records
     end
   end
@@ -182,4 +352,28 @@ defmodule Nostr.Relay.Store.QueryBuilder do
   end
 
   defp full_hex_id?(value) when is_binary(value), do: byte_size(value) == 64
+
+  # --- FTS5 query sanitization ---
+
+  # Splits search into tokens, strips NIP-50 extension tokens (key:value),
+  # and wraps each token in double quotes to escape FTS5 special syntax.
+  defp sanitize_fts_query(search) when is_binary(search) do
+    search
+    |> String.split(~r/\s+/, trim: true)
+    |> Enum.reject(&extension_token?/1)
+    |> Enum.map_join(" ", &quote_fts_token/1)
+  end
+
+  # NIP-50 extensions use key:value syntax (e.g. language:en, domain:example.com)
+  defp extension_token?(token), do: Regex.match?(~r/^[a-z]+:/, token)
+
+  # Wrap token in double quotes, escaping any internal double quotes
+  defp quote_fts_token(token) do
+    escaped = String.replace(token, "\"", "\"\"")
+    "\"#{escaped}\""
+  end
+
+  defp apply_ephemeral_filter(query) do
+    where(query, [e], e.kind < 20_000 or e.kind > 29_999)
+  end
 end

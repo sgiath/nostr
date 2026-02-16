@@ -34,7 +34,7 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
 
       expected =
         event.id
-        |> Message.ok(true, "event accepted")
+        |> Message.ok(true, "")
         |> Message.serialize()
 
       assert {
@@ -160,7 +160,7 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       assert routed_state.store_scope == scope
     end
 
-    test "dispatches EVENT to subscriptions matching active filters", %{state: state} do
+    test "dispatches EVENT OK without inline fan-out (fan-out via PubSub)", %{state: state} do
       filter = %Filter{kinds: [1]}
 
       request =
@@ -173,12 +173,11 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       matching_event = valid_event(created_by: @author_one)
       event_payload = Message.create_event(matching_event) |> Message.serialize()
 
-      ok_payload = Message.ok(matching_event.id, true, "event accepted") |> Message.serialize()
-      event_frame = Message.event(matching_event, "live-sub") |> Message.serialize()
+      ok_payload = Message.ok(matching_event.id, true, "") |> Message.serialize()
 
       assert {
                :push,
-               [{:text, ^ok_payload}, {:text, ^event_frame}],
+               [{:text, ^ok_payload}],
                %ConnectionState{messages: 2}
              } = MessageRouter.route_frame(event_payload, active_state)
     end
@@ -197,7 +196,7 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       event_payload = Message.create_event(non_matching_event) |> Message.serialize()
 
       ok_payload =
-        Message.ok(non_matching_event.id, true, "event accepted") |> Message.serialize()
+        Message.ok(non_matching_event.id, true, "") |> Message.serialize()
 
       assert {
                :push,

@@ -72,7 +72,7 @@ defmodule Nostr.Relay.Web.WebsocketSmokeIntegrationTest do
 
       expected_ok =
         event.id
-        |> Message.ok(true, "event accepted")
+        |> Message.ok(true, "")
         |> Message.serialize()
 
       assert recv_text!(left) == expected_ok

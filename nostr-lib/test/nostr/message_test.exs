@@ -370,6 +370,46 @@ defmodule Nostr.MessageTest do
     end
 
     @tag :capture_log
+    test "returns error for EVENT with tampered ID" do
+      event_map = Fixtures.tampered_id_event()
+      json = ~s(["EVENT",#{JSON.encode!(event_map)}])
+
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
+    test "returns error for EVENT with tampered signature" do
+      event_map = Fixtures.tampered_sig_event()
+      json = ~s(["EVENT",#{JSON.encode!(event_map)}])
+
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
+    test "returns error for EVENT with tampered content" do
+      event_map = Fixtures.tampered_content_event()
+      json = ~s(["EVENT",#{JSON.encode!(event_map)}])
+
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
+    test "returns error for relay EVENT with tampered ID" do
+      event_map = Fixtures.tampered_id_event()
+      json = ~s(["EVENT","sub123",#{JSON.encode!(event_map)}])
+
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
+    test "returns error for AUTH with tampered signature" do
+      event_map = Fixtures.tampered_sig_event()
+      json = ~s(["AUTH",#{JSON.encode!(event_map)}])
+
+      assert Nostr.Message.parse(json) == :error
+    end
+
+    @tag :capture_log
     test "returns error for unknown message type" do
       json = ~s(["UNKNOWN","data"])
 
@@ -464,6 +504,53 @@ defmodule Nostr.MessageTest do
     test "returns error for NEG-OPEN with non-hex payload" do
       json = ~s(["NEG-OPEN","neg-sub",{"kinds":[1]},"not-hex"])
       assert Nostr.Message.parse(json) == :error
+    end
+  end
+
+  describe "parse_with_reason/1" do
+    test "returns parsed event for valid payloads" do
+      event = Fixtures.signed_event()
+      json = ~s(["EVENT",#{JSON.encode!(event)}])
+
+      assert {:ok, {:event, parsed}} = Nostr.Message.parse_with_reason(json)
+      assert parsed.id == event.id
+    end
+
+    test "returns unsupported escape reason for invalid JSON escape sequence" do
+      assert {
+               :error,
+               :unsupported_json_escape
+             } = Nostr.Message.parse_with_reason(~S(["EVENT","value\q"]))
+    end
+
+    test "returns unsupported escape reason for unlisted JSON escape sequence" do
+      assert {
+               :error,
+               :unsupported_json_escape
+             } = Nostr.Message.parse_with_reason(~S(["CLOSE","value\/"]))
+    end
+
+    test "returns unsupported escape reason for unicode literal control escape" do
+      assert {
+               :error,
+               :unsupported_json_escape
+             } = Nostr.Message.parse_with_reason(~S(["CLOSE","value\u0001"]))
+    end
+
+    test "returns unsupported literal reason for raw control characters in strings" do
+      payload = "[\"CLOSE\",\"close" <> <<1>> <> "\"]"
+
+      assert {
+               :error,
+               :unsupported_json_literals
+             } = Nostr.Message.parse_with_reason(payload)
+    end
+
+    test "returns invalid message format for malformed JSON" do
+      assert {
+               :error,
+               :invalid_message_format
+             } = Nostr.Message.parse_with_reason("{bad json")
     end
   end
 

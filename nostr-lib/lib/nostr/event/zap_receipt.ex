@@ -335,6 +335,10 @@ defmodule Nostr.Event.ZapReceipt do
     |> JSON.encode!()
   end
 
+  defp tag_to_list(%Tag{type: type, data: nil}) do
+    [to_string(type)]
+  end
+
   defp tag_to_list(%Tag{type: type, data: data, info: info}) do
     [to_string(type), data | info]
   end

@@ -62,4 +62,60 @@ defmodule Nostr.Relay.Web.ConnectionStateTest do
       refute ConnectionState.subscription_active?(right, "left")
     end
   end
+
+  describe "auth" do
+    test "defaults to auth not required and not authenticated" do
+      state = ConnectionState.new()
+
+      refute state.auth_required
+      assert state.challenge == nil
+      refute ConnectionState.authenticated?(state)
+    end
+
+    test "creates state with auth_required flag" do
+      state = ConnectionState.new(auth_required: true)
+
+      assert state.auth_required
+      refute ConnectionState.authenticated?(state)
+    end
+
+    test "with_challenge sets the challenge string" do
+      state =
+        ConnectionState.new()
+        |> ConnectionState.with_challenge("test-challenge-abc")
+
+      assert state.challenge == "test-challenge-abc"
+    end
+
+    test "authenticate_pubkey adds a pubkey and marks as authenticated" do
+      state =
+        ConnectionState.new()
+        |> ConnectionState.authenticate_pubkey("aabb")
+
+      assert ConnectionState.authenticated?(state)
+      assert ConnectionState.pubkey_authenticated?(state, "aabb")
+      refute ConnectionState.pubkey_authenticated?(state, "ccdd")
+    end
+
+    test "supports multiple authenticated pubkeys per NIP-42" do
+      state =
+        ConnectionState.new()
+        |> ConnectionState.authenticate_pubkey("pubkey1")
+        |> ConnectionState.authenticate_pubkey("pubkey2")
+
+      assert ConnectionState.authenticated?(state)
+      assert ConnectionState.pubkey_authenticated?(state, "pubkey1")
+      assert ConnectionState.pubkey_authenticated?(state, "pubkey2")
+    end
+
+    test "authenticate_pubkey is idempotent" do
+      state =
+        ConnectionState.new()
+        |> ConnectionState.authenticate_pubkey("aabb")
+        |> ConnectionState.authenticate_pubkey("aabb")
+
+      assert ConnectionState.authenticated?(state)
+      assert MapSet.size(state.authenticated_pubkeys) == 1
+    end
+  end
 end

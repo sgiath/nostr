@@ -33,6 +33,7 @@ defmodule NostrRelay.MixProject do
       {:ecto_sql, "~> 3.13"},
       {:ecto_sqlite3, "~> 0.22"},
       {:phoenix_pubsub, "~> 2.2"},
+      {:toml, "~> 0.7"},
       {:mint_web_socket, "~> 1.0", only: :test},
 
       # Development

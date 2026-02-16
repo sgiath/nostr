@@ -1,8 +1,6 @@
 defmodule Nostr.Relay.Store do
   @moduledoc false
 
-  import Ecto.Query
-
   alias Nostr.Event
   alias Nostr.Filter
   alias Nostr.Relay.Repo
@@ -14,16 +12,11 @@ defmodule Nostr.Relay.Store do
   @behaviour Nostr.Relay.Store.Behavior
 
   @impl true
-  @spec insert_event(Event.t(), keyword()) :: :ok | {:error, term()}
+  @spec insert_event(Event.t(), keyword()) :: Nostr.Relay.Store.Behavior.insert_result()
   def insert_event(%Event{} = event, opts) when is_list(opts) do
     raw_json = Keyword.get(opts, :raw_json, JSON.encode!(event))
 
-    case classify_kind(event.kind) do
-      :ephemeral -> :ok
-      :regular -> insert_regular(event, raw_json)
-      :replaceable -> upsert_replaceable(event, raw_json)
-      :parameterized_replaceable -> upsert_parameterized_replaceable(event, raw_json)
-    end
+    insert_event_with_tags(event, raw_json)
   rescue
     error -> {:error, error}
   end
@@ -40,6 +33,14 @@ defmodule Nostr.Relay.Store do
 
         {:ok, events}
     end
+  rescue
+    error -> {:error, error}
+  end
+
+  @impl true
+  @spec count_events([Filter.t()], keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def count_events(filters, _opts) when is_list(filters) do
+    QueryBuilder.count_events(filters)
   rescue
     error -> {:error, error}
   end
@@ -62,136 +63,6 @@ defmodule Nostr.Relay.Store do
     _error -> :ok
   end
 
-  # --- Kind classification ---
-
-  defp classify_kind(kind) do
-    cond do
-      kind in [0, 3] or kind in 10_000..19_999 -> :replaceable
-      kind in 20_000..29_999 -> :ephemeral
-      kind in 30_000..39_999 -> :parameterized_replaceable
-      true -> :regular
-    end
-  end
-
-  # --- D-tag extraction ---
-
-  defp extract_d_tag(%Event{tags: tags}) when is_list(tags) do
-    case Enum.find(tags, &(&1.type == :d)) do
-      %Tag{data: data} when is_binary(data) -> data
-      _ -> ""
-    end
-  end
-
-  # --- Regular insert (existing behavior) ---
-
-  defp insert_regular(%Event{} = event, raw_json) do
-    if Repo.get(EventRecord, event.id) do
-      :ok
-    else
-      insert_event_with_tags(event, raw_json)
-    end
-  end
-
-  # --- Replaceable upsert (kinds 0, 3, 10000-19999) ---
-
-  defp upsert_replaceable(%Event{} = event, raw_json) do
-    query =
-      from(e in EventRecord,
-        where: e.pubkey == ^event.pubkey and e.kind == ^event.kind
-      )
-
-    Repo.transaction(fn ->
-      case Repo.one(query) do
-        nil -> do_insert!(event, raw_json)
-        existing -> maybe_replace!(existing, event, raw_json)
-      end
-    end)
-    |> normalize_transaction_result()
-  end
-
-  # --- Parameterized replaceable upsert (kinds 30000-39999) ---
-
-  defp upsert_parameterized_replaceable(%Event{} = event, raw_json) do
-    d_value = extract_d_tag(event)
-
-    query =
-      from(e in EventRecord,
-        join: t in EventTag,
-        on: t.event_id == e.event_id,
-        where:
-          e.pubkey == ^event.pubkey and
-            e.kind == ^event.kind and
-            t.tag_name == "d" and
-            t.tag_value == ^d_value
-      )
-
-    Repo.transaction(fn ->
-      case Repo.one(query) do
-        nil ->
-          do_insert!(event, raw_json)
-          maybe_ensure_d_tag(event)
-
-        existing ->
-          maybe_replace!(existing, event, raw_json)
-          maybe_ensure_d_tag(event)
-      end
-    end)
-    |> normalize_transaction_result()
-  end
-
-  # --- Compare and conditionally replace (called inside transaction) ---
-
-  defp maybe_replace!(%EventRecord{} = existing, %Event{} = event, raw_json) do
-    new_ts = DateTime.to_unix(event.created_at)
-
-    if new_ts > existing.created_at or
-         (new_ts == existing.created_at and event.id < existing.event_id) do
-      replace!(existing.event_id, event, raw_json)
-    else
-      :skip
-    end
-  end
-
-  # --- Replace: delete old + insert new (called inside transaction) ---
-
-  defp replace!(old_event_id, %Event{} = new_event, raw_json) do
-    from(t in EventTag, where: t.event_id == ^old_event_id) |> Repo.delete_all()
-    Repo.delete!(%EventRecord{event_id: old_event_id})
-    do_insert!(new_event, raw_json)
-  end
-
-  # --- Insert event record + tags (called inside transaction) ---
-
-  defp do_insert!(%Event{} = event, raw_json) do
-    attrs = build_attrs(event, raw_json)
-
-    case EventRecord.changeset(%EventRecord{}, attrs) |> Repo.insert() do
-      {:ok, _record} ->
-        insert_tags(event)
-
-      {:error, reason} ->
-        Repo.rollback(reason)
-    end
-  end
-
-  # --- Ensure d-tag row for parameterized replaceable events ---
-
-  defp maybe_ensure_d_tag(%Event{kind: kind} = event) when kind in 30_000..39_999 do
-    d_tag_stored? =
-      Enum.any?(event.tags, fn
-        %Tag{type: :d, data: data} when is_binary(data) -> true
-        _ -> false
-      end)
-
-    unless d_tag_stored? do
-      %EventTag{}
-      |> EventTag.changeset(%{event_id: event.id, tag_name: "d", tag_value: ""})
-      |> Repo.insert!()
-    end
-  end
-
-  defp maybe_ensure_d_tag(_event), do: :ok
-
   # --- Shared helpers ---
 
   defp build_attrs(%Event{} = event, raw_json) do
@@ -206,10 +77,22 @@ defmodule Nostr.Relay.Store do
   end
 
   defp insert_event_with_tags(%Event{} = event, raw_json) do
-    Repo.transaction(fn ->
-      do_insert!(event, raw_json)
-    end)
-    |> normalize_transaction_result()
+    if Repo.get(EventRecord, event.id) do
+      :duplicate
+    else
+      Repo.transaction(fn ->
+        attrs = build_attrs(event, raw_json)
+
+        case EventRecord.changeset(%EventRecord{}, attrs) |> Repo.insert() do
+          {:ok, _record} ->
+            insert_tags(event)
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
+      |> normalize_transaction_result()
+    end
   end
 
   defp normalize_transaction_result({:ok, _}), do: :ok

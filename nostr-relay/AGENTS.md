@@ -24,11 +24,12 @@ This folder is intentionally scoped as an **implementation intent** today.
 
 - Required for this relay: `NIP-01` (protocol framing + subscriptions/events).
 - Required for relay metadata: `NIP-11` (relay info + policy fields).
+- Implemented staged support:
+  - `NIP-42` (AUTH) **(Implemented.)**
+  - `NIP-45` (COUNT) **(Implemented.)**
 - Planned staged support:
   - `NIP-09` (deletion events)
   - `NIP-13` (PoW policy)
-  - `NIP-42` (AUTH)
-  - `NIP-45` (COUNT)
 - Scope excludes direct submodule edits outside this directory unless explicitly needed.
 
 ## Planned Milestones
@@ -47,13 +48,14 @@ This folder is intentionally scoped as an **implementation intent** today.
 - Stage behaviour: `Nostr.Relay.Pipeline.Stage`
 - Handler stages:
   - `Nostr.Relay.Pipeline.Stages.ProtocolValidator`
+  - `Nostr.Relay.Pipeline.Stages.AuthEnforcer`
   - `Nostr.Relay.Pipeline.Stages.MessageValidator`
   - `Nostr.Relay.Pipeline.Stages.RelayPolicyValidator`
   - `Nostr.Relay.Pipeline.Stages.MessageHandler`
   - `Nostr.Relay.Pipeline.Stages.StorePolicy`
 
-Current default stage order is protocol parse -> message validation -> relay policy ->
-message handling -> store policy.
+Current default stage order is protocol parse -> auth enforcer -> message validation ->
+relay policy -> message handling -> store policy.
 
 ## Storage Baseline
 
@@ -82,3 +84,14 @@ message handling -> store policy.
   the websocket with `WebSocket.new/4` after matching the `101` response headers.
 - `WebSocket.stream/2` can return `:unknown` during integration handshake/message flow,
   so test helpers should retry instead of treating it as terminal failure.
+- `ProtocolValidator.safe_parse` and `try_unverified_event` both call `Parser.parse`,
+  so a crash in `Parser.parse` defeats the fallback path. Fixes to parsing robustness
+  must go in `nostr-lib`'s `Parser.parse` itself, not in the relay's rescue wrappers.
+- `Event.compute_id` → `serialize` → `DateTime.to_unix` crashes on nil `created_at`.
+  Both `Validator.valid?` (nostr-lib) and `EventValidator.validate_event` (nostr-relay)
+  call `compute_id` independently — both need nil guards, fixing one isn't enough.
+- JSON scientific notation (e.g. `1e+10`) decodes to Elixir float, not integer.
+  `DateTime.from_unix!/1` only accepts integers, so this is a distinct crash vector
+  from out-of-range integers. Any unix timestamp parsing must handle both cases.
+- `mix check --fix` in nostr-relay has pre-existing Credo failures (~15 readability
+  issues, 1 cyclomatic complexity) that predate current work. Tests pass independently.

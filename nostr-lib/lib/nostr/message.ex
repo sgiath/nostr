@@ -28,6 +28,9 @@ defmodule Nostr.Message do
           optional(:hll) => binary()
         }
 
+  @type parse_reason() ::
+          :invalid_message_format | :unsupported_json_escape | :unsupported_json_literals
+
   @doc """
   Generate post new event message
   """
@@ -165,14 +168,132 @@ defmodule Nostr.Message do
 
   @doc """
   Parse binary message to Elixir tuple, if message contains event it will be returned as general
-  `Nostr.Event.t()` struct
+  `Nostr.Event.t()` struct.
+
+  Returns `:error` for invalid payloads.
   """
   @spec parse(msg :: String.t()) :: t()
   def parse(msg) when is_binary(msg) do
-    msg
-    |> JSON.decode!()
-    |> do_parse(:general)
+    case parse_with_reason(msg) do
+      {:ok, parsed_message} -> parsed_message
+      {:error, _reason} -> :error
+    end
   end
+
+  @doc """
+  Parse binary message to Elixir tuple and return structured parse errors.
+
+  The protocol-level parser in the relay uses this function to distinguish malformed JSON
+  escape/literal cases from other parse failures.
+  """
+  @spec parse_with_reason(String.t()) :: {:ok, t()} | {:error, parse_reason()}
+  def parse_with_reason(msg) when is_binary(msg) do
+    with :ok <- validate_json_payload(msg),
+         {:ok, decoded} <- JSON.decode(msg) do
+      case do_parse(decoded, :general) do
+        :error -> {:error, :invalid_message_format}
+        parsed -> {:ok, parsed}
+      end
+    else
+      {:error, reason} when reason in [:unsupported_json_escape, :unsupported_json_literals] ->
+        {:error, reason}
+
+      {:error, _decode_error} ->
+        {:error, :invalid_message_format}
+    end
+  end
+
+  defp validate_json_payload(msg) when is_binary(msg) do
+    scan_json_payload(msg, false, false)
+  end
+
+  defp scan_json_payload(<<>>, false, false), do: :ok
+  defp scan_json_payload(<<>>, true, false), do: {:error, :invalid_message_format}
+  defp scan_json_payload(<<>>, _in_string, true), do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<?\", rest::binary>>, false, false),
+    do: scan_json_payload(rest, true, false)
+
+  defp scan_json_payload(<<?\\, rest::binary>>, true, false),
+    do: scan_json_payload(rest, true, true)
+
+  defp scan_json_payload(<<?\", rest::binary>>, true, false),
+    do: scan_json_payload(rest, false, false)
+
+  defp scan_json_payload(<<byte::8, _rest::binary>>, true, false) when byte < 32,
+    do: {:error, :unsupported_json_literals}
+
+  defp scan_json_payload(<<_byte::8, rest::binary>>, true, false),
+    do: scan_json_payload(rest, true, false)
+
+  defp scan_json_payload(<<_byte::8, rest::binary>>, false, false),
+    do: scan_json_payload(rest, false, false)
+
+  defp scan_json_payload(<<?", rest::binary>>, true, true),
+    do: scan_json_payload(rest, true, false)
+
+  defp scan_json_payload(<<?\\, ?", _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<byte::8, rest::binary>>, true, true)
+       when byte in [34, 92, ?b, ?f, ?n, ?r, ?t],
+       do: scan_json_payload(rest, true, false)
+
+  defp scan_json_payload(<<?u, a::8, b::8, c::8, d::8, rest::binary>>, true, true) do
+    if valid_hex_byte?(a) and valid_hex_byte?(b) and valid_hex_byte?(c) and valid_hex_byte?(d) do
+      if json_unicode_escape_codepoint(a, b, c, d) < 32 do
+        {:error, :unsupported_json_escape}
+      else
+        scan_json_payload(rest, true, false)
+      end
+    else
+      {:error, :unsupported_json_escape}
+    end
+  end
+
+  defp scan_json_payload(<<?\", _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<?\\, _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<?\/, _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<?b, _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<?f, _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<?n, _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<?r, _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<?t, _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp scan_json_payload(<<_byte::8, _rest::binary>>, true, true),
+    do: {:error, :unsupported_json_escape}
+
+  defp valid_hex_byte?(byte) when byte >= ?0 and byte <= ?9, do: true
+  defp valid_hex_byte?(byte) when byte >= ?a and byte <= ?f, do: true
+  defp valid_hex_byte?(byte) when byte >= ?A and byte <= ?F, do: true
+  defp valid_hex_byte?(_byte), do: false
+
+  defp json_unicode_escape_codepoint(a, b, c, d) do
+    hex_digit_to_int(a) * 16 * 16 * 16 +
+      hex_digit_to_int(b) * 16 * 16 +
+      hex_digit_to_int(c) * 16 +
+      hex_digit_to_int(d)
+  end
+
+  defp hex_digit_to_int(byte) when byte >= ?0 and byte <= ?9, do: byte - ?0
+  defp hex_digit_to_int(byte) when byte >= ?a and byte <= ?f, do: byte - ?a + 10
+  defp hex_digit_to_int(byte) when byte >= ?A and byte <= ?F, do: byte - ?A + 10
+  defp hex_digit_to_int(_byte), do: 0
 
   @doc """
   Parse binary message to Elixir tuple, if message contains event it will be returned as specific
@@ -187,11 +308,17 @@ defmodule Nostr.Message do
 
   # Client to relay
   defp do_parse(["EVENT", event], :general) when is_map(event) do
-    {:event, Nostr.Event.parse(event)}
+    case Nostr.Event.parse(event) do
+      nil -> :error
+      parsed -> {:event, parsed}
+    end
   end
 
   defp do_parse(["EVENT", event], :specific) when is_map(event) do
-    {:event, Nostr.Event.parse_specific(event)}
+    case Nostr.Event.parse_specific(event) do
+      nil -> :error
+      parsed -> {:event, parsed}
+    end
   end
 
   defp do_parse(["REQ", sub_id | filters], _type)
@@ -227,20 +354,32 @@ defmodule Nostr.Message do
   end
 
   defp do_parse(["AUTH", event], :general) when is_map(event) do
-    {:auth, Nostr.Event.parse(event)}
+    case Nostr.Event.parse(event) do
+      nil -> :error
+      parsed -> {:auth, parsed}
+    end
   end
 
   defp do_parse(["AUTH", event], :specific) when is_map(event) do
-    {:auth, Nostr.Event.parse_specific(event)}
+    case Nostr.Event.parse_specific(event) do
+      nil -> :error
+      parsed -> {:auth, parsed}
+    end
   end
 
   # Relay to client
   defp do_parse(["EVENT", sub_id, event], :general) when is_binary(sub_id) and is_map(event) do
-    {:event, sub_id, Nostr.Event.parse(event)}
+    case Nostr.Event.parse(event) do
+      nil -> :error
+      parsed -> {:event, sub_id, parsed}
+    end
   end
 
   defp do_parse(["EVENT", sub_id, event], :specific) when is_binary(sub_id) and is_map(event) do
-    {:event, sub_id, Nostr.Event.parse_specific(event)}
+    case Nostr.Event.parse_specific(event) do
+      nil -> :error
+      parsed -> {:event, sub_id, parsed}
+    end
   end
 
   defp do_parse(["NOTICE", message], _type) when is_binary(message) do

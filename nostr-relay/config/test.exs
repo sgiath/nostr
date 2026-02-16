@@ -7,7 +7,7 @@ config :nostr_relay, Nostr.Relay.Repo,
 
 config :nostr_relay, :server,
   ip: {127, 0, 0, 1},
-  port: 4001
+  port: 4002
 
 config :nostr_relay, :relay_info,
   name: "Nostr Relay",

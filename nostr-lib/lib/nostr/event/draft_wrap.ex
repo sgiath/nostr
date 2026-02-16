@@ -221,6 +221,10 @@ defmodule Nostr.Event.DraftWrap do
 
   defp normalize_draft(draft) when is_map(draft), do: draft
 
+  defp tag_to_list(%Tag{type: type, data: nil}) do
+    [Atom.to_string(type)]
+  end
+
   defp tag_to_list(%Tag{type: type, data: data, info: info}) do
     [Atom.to_string(type), data | info]
   end

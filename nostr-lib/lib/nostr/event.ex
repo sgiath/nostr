@@ -31,6 +31,17 @@ defmodule Nostr.Event do
   end
 
   @doc """
+  Parse raw event map to `Nostr.Event` struct without validating ID or signature.
+
+  Useful for relays that need to preserve the event struct (including the claimed ID)
+  even when validation fails, so they can produce NIP-01 compliant `OK` error responses.
+  """
+  @spec parse_unverified(event :: map()) :: t()
+  def parse_unverified(event) when is_map(event) do
+    Parser.parse(event)
+  end
+
+  @doc """
   Parse raw event map to specific event struct (also validates ID and signature)
   """
   @spec parse_specific(event :: map()) :: struct()

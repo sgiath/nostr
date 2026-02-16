@@ -26,9 +26,7 @@ trap cleanup EXIT INT TERM
 
 (
   cd "$RELAY_APP_DIR"
-  MIX_ENV=dev \
-    NOSTR_RELAY_ENABLED="$RELAY_ENABLED" \
-    NOSTR_RELAY_PORT="$RELAY_PORT" \
+  MIX_ENV=test \
     mix run --no-halt
 ) &
 RELAY_PID=$!

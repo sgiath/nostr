@@ -1,0 +1,42 @@
+# Nostr Relay Configuration
+# Copy to config/relay.toml (dev) or ~/.config/nostr-relay/relay.toml (prod).
+# All values are optional — omitted fields keep compile-time defaults.
+# Override the file path with the NOSTR_RELAY_CONFIG environment variable.
+
+[relay]
+name = "My Nostr Relay"
+description = "A personal relay."
+# pubkey = "hex-encoded-32-byte-pubkey"
+# contact = "mailto:admin@example.com"
+# url = "wss://relay.example.com"          # used for NIP-42 relay tag validation
+
+[server]
+ip = "127.0.0.1"
+port = 4000
+
+[database]
+# path = "~/.local/share/nostr-relay/relay.db"
+
+[limits]
+max_subscriptions = 100
+max_filters = 100
+max_limit = 10_000
+min_prefix_length = 4
+
+# NIP-42 Authentication
+# The relay always sends an AUTH challenge on every new connection so clients
+# can optionally authenticate. When required = true, clients MUST respond with
+# a signed kind-22242 event before any EVENT/REQ/COUNT is accepted.
+# Unauthenticated connections are closed after timeout_seconds.
+#
+# mode controls access-list behaviour:
+#   "none"      — any authenticated pubkey is accepted (default)
+#   "whitelist" — only pubkeys in the whitelist are accepted
+#   "denylist"  — all pubkeys except those in the denylist are accepted
+
+[auth]
+# required = false
+# mode = "none"
+# timeout_seconds = 30
+# whitelist = ["hex-pubkey-1", "hex-pubkey-2"]
+# denylist  = ["hex-pubkey-3"]

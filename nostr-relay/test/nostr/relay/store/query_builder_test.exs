@@ -196,6 +196,14 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
       results = query!(%Filter{limit: 2})
       assert event_ids(results) == [e_new.id, e_old.id]
     end
+
+    test "limit 0 returns no events" do
+      insert!(created_at: ~U[2024-06-15 12:00:00Z])
+      insert!(created_at: ~U[2024-06-16 12:00:00Z], seckey: @seckey_b)
+
+      results = query!(%Filter{limit: 0})
+      assert results == []
+    end
   end
 
   # --- ordering ---
@@ -393,6 +401,266 @@ defmodule Nostr.Relay.Store.QueryBuilderTest do
         ])
 
       assert event_ids(results) == [e1.id]
+    end
+
+    test "deduplicates replaceable versions by replacement group" do
+      new = insert!(kind: 0, created_at: ~U[2024-06-16 12:00:00Z])
+      _old = insert!(kind: 0, created_at: ~U[2024-06-15 12:00:00Z])
+
+      {:ok, results} = QueryBuilder.query_events([%Filter{kinds: [0]}])
+
+      assert event_ids(results) == [new.id]
+    end
+
+    test "deduplicates parameterized replaceable by kind, pubkey, and d-tag" do
+      _old =
+        insert!(
+          kind: 30_000,
+          tags: [Tag.create(:d, "group")],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      new =
+        insert!(
+          kind: 30_000,
+          tags: [Tag.create(:d, "group")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      other =
+        insert!(
+          kind: 30_000,
+          tags: [Tag.create(:d, "other")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      {:ok, results} = QueryBuilder.query_events([%Filter{kinds: [30_000]}])
+      result_ids = event_id_set(results)
+
+      assert result_ids == MapSet.new([new.id, other.id])
+    end
+
+    test "ids filter bypasses replacement collapse" do
+      old = insert!(kind: 0, created_at: ~U[2024-06-15 12:00:00Z])
+      new = insert!(kind: 0, created_at: ~U[2024-06-16 12:00:00Z])
+
+      {:ok, results} = QueryBuilder.query_events([%Filter{ids: [old.id, new.id]}])
+      assert event_id_set(results) == MapSet.new([old.id, new.id])
+      assert length(results) == 2
+    end
+
+    test "ephemeral kinds are hidden from normal queries" do
+      ephemeral = insert!(kind: 20_000, created_at: ~U[2024-06-15 12:00:00Z])
+      regular = insert!(created_at: ~U[2024-06-16 12:00:00Z])
+
+      {:ok, results} = QueryBuilder.query_events([%Filter{}])
+      assert event_id_set(results) == MapSet.new([regular.id])
+
+      assert {:ok, []} = QueryBuilder.query_events([%Filter{ids: [ephemeral.id]}])
+    end
+  end
+
+  # --- search filter (NIP-50) ---
+
+  describe "search filter" do
+    test "matches events by content keyword" do
+      e1 = insert!(content: "the best nostr apps for beginners")
+
+      _e2 =
+        insert!(content: "hello world", created_at: ~U[2024-06-16 12:00:00Z], seckey: @seckey_b)
+
+      results = query!(%Filter{search: "nostr"})
+      assert event_ids(results) == [e1.id]
+    end
+
+    test "matches multiple terms (AND semantics)" do
+      e1 = insert!(content: "the best nostr apps for beginners")
+
+      _e2 =
+        insert!(
+          content: "nostr is great",
+          created_at: ~U[2024-06-16 12:00:00Z],
+          seckey: @seckey_b
+        )
+
+      results = query!(%Filter{search: "nostr beginners"})
+      assert event_ids(results) == [e1.id]
+    end
+
+    test "search combined with kind filter" do
+      e1 = insert!(content: "nostr is awesome", kind: 1)
+
+      _e2 =
+        insert!(
+          content: "nostr is awesome",
+          kind: 7,
+          created_at: ~U[2024-06-16 12:00:00Z],
+          seckey: @seckey_b
+        )
+
+      results = query!(%Filter{search: "nostr", kinds: [1]})
+      assert event_ids(results) == [e1.id]
+    end
+
+    test "search combined with author filter" do
+      e1 = insert!(content: "nostr is awesome", seckey: @seckey_a)
+
+      _e2 =
+        insert!(
+          content: "nostr is awesome",
+          seckey: @seckey_b,
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      results = query!(%Filter{search: "nostr", authors: [e1.pubkey]})
+      assert event_ids(results) == [e1.id]
+    end
+
+    test "no match returns empty" do
+      insert!(content: "hello world")
+
+      results = query!(%Filter{search: "zzzznonexistent"})
+      assert results == []
+    end
+
+    test "nil search returns all events (same as no filter)" do
+      e1 = insert!(content: "anything")
+
+      e2 =
+        insert!(
+          content: "something else",
+          created_at: ~U[2024-06-16 12:00:00Z],
+          seckey: @seckey_b
+        )
+
+      results = query!(%Filter{search: nil})
+      assert event_id_set(results) == MapSet.new([e1.id, e2.id])
+    end
+
+    test "empty string search returns all events" do
+      e1 = insert!(content: "anything")
+
+      e2 =
+        insert!(
+          content: "something else",
+          created_at: ~U[2024-06-16 12:00:00Z],
+          seckey: @seckey_b
+        )
+
+      results = query!(%Filter{search: ""})
+      assert event_id_set(results) == MapSet.new([e1.id, e2.id])
+    end
+
+    test "special characters in search don't cause errors" do
+      insert!(content: "hello world")
+
+      # These should not crash — they get sanitized
+      assert {:ok, _} = QueryBuilder.query_events([%Filter{search: "hello AND world"}])
+      assert {:ok, _} = QueryBuilder.query_events([%Filter{search: "hello OR \"world\""}])
+      assert {:ok, _} = QueryBuilder.query_events([%Filter{search: "(test)"}])
+      assert {:ok, _} = QueryBuilder.query_events([%Filter{search: "test*"}])
+    end
+
+    test "extension tokens are stripped from search" do
+      e1 = insert!(content: "nostr is great")
+
+      results = query!(%Filter{search: "nostr language:en"})
+      assert event_ids(results) == [e1.id]
+    end
+
+    test "search with limit" do
+      for i <- 1..5 do
+        insert!(
+          content: "nostr event #{i}",
+          created_at: DateTime.add(~U[2024-06-15 12:00:00Z], i, :second)
+        )
+      end
+
+      results = query!(%Filter{search: "nostr", limit: 2})
+      assert length(results) == 2
+    end
+
+    test "event_matches_filters? works with search" do
+      e1 = insert!(content: "nostr is awesome")
+
+      _e2 =
+        insert!(content: "hello world", created_at: ~U[2024-06-16 12:00:00Z], seckey: @seckey_b)
+
+      assert QueryBuilder.event_matches_filters?(e1.id, [%Filter{search: "nostr"}])
+      refute QueryBuilder.event_matches_filters?(e1.id, [%Filter{search: "zzzznonexistent"}])
+    end
+  end
+
+  # --- count_events ---
+
+  describe "count_events/1" do
+    test "counts matching events with single filter" do
+      insert!(kind: 1, created_at: ~U[2024-06-15 12:00:00Z])
+      insert!(kind: 1, created_at: ~U[2024-06-16 12:00:00Z], seckey: @seckey_b)
+      insert!(kind: 7, created_at: ~U[2024-06-17 12:00:00Z])
+
+      assert {:ok, 2} = QueryBuilder.count_events([%Filter{kinds: [1]}])
+    end
+
+    test "counts all events with empty filter" do
+      insert!(created_at: ~U[2024-06-15 12:00:00Z])
+      insert!(created_at: ~U[2024-06-16 12:00:00Z], seckey: @seckey_b)
+
+      assert {:ok, 2} = QueryBuilder.count_events([%Filter{}])
+    end
+
+    test "count_events applies replacement collapse" do
+      insert!(kind: 0, created_at: ~U[2024-06-15 12:00:00Z])
+      insert!(kind: 0, created_at: ~U[2024-06-16 12:00:00Z])
+
+      assert {:ok, 1} = QueryBuilder.count_events([%Filter{kinds: [0]}])
+    end
+
+    test "returns 0 for no matches" do
+      insert!(kind: 1)
+
+      assert {:ok, 0} = QueryBuilder.count_events([%Filter{kinds: [7]}])
+    end
+
+    test "multi-filter deduplicates" do
+      e1 = insert!(kind: 1, seckey: @seckey_a, created_at: ~U[2024-06-15 12:00:00Z])
+
+      # Both filters match e1 — count should still be 1
+      assert {:ok, 1} =
+               QueryBuilder.count_events([
+                 %Filter{kinds: [1]},
+                 %Filter{authors: [e1.pubkey]}
+               ])
+    end
+
+    test "multi-filter counts union" do
+      insert!(kind: 1, created_at: ~U[2024-06-15 12:00:00Z])
+      insert!(kind: 7, created_at: ~U[2024-06-16 12:00:00Z], seckey: @seckey_b)
+
+      assert {:ok, 2} =
+               QueryBuilder.count_events([%Filter{kinds: [1]}, %Filter{kinds: [7]}])
+    end
+
+    test "tag filter does not overcount from JOIN expansion" do
+      # Event with two matching tag values — should count as 1, not 2
+      insert!(
+        tags: [Tag.create(:t, "nostr"), Tag.create(:t, "bitcoin")],
+        created_at: ~U[2024-06-15 12:00:00Z]
+      )
+
+      assert {:ok, 1} =
+               QueryBuilder.count_events([%Filter{tags: %{"#t" => ["nostr", "bitcoin"]}}])
+    end
+
+    test "respects since/until" do
+      insert!(created_at: ~U[2024-06-14 12:00:00Z])
+      insert!(created_at: ~U[2024-06-15 12:00:00Z], seckey: @seckey_b)
+      insert!(created_at: ~U[2024-06-16 12:00:00Z])
+
+      assert {:ok, 1} =
+               QueryBuilder.count_events([
+                 %Filter{since: ~U[2024-06-15 00:00:00Z], until: ~U[2024-06-15 23:59:59Z]}
+               ])
     end
   end
 

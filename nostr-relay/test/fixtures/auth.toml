@@ -1,0 +1,5 @@
+[auth]
+required = true
+mode = "whitelist"
+timeout_seconds = 60
+whitelist = ["aabb", "ccdd"]

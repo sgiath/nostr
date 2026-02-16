@@ -232,6 +232,61 @@ defmodule Nostr.EventTest do
 
       assert %DateTime{} = event.created_at
     end
+
+    test "returns nil for event with out-of-range created_at" do
+      raw = Fixtures.raw_event_map()
+      raw = Map.put(raw, "created_at", 9_223_372_036_854_775_807)
+
+      assert Nostr.Event.parse(raw) == nil
+    end
+
+    test "returns nil for event with float created_at" do
+      raw = Fixtures.raw_event_map()
+      raw = Map.put(raw, "created_at", 1.0e10)
+
+      assert Nostr.Event.parse(raw) == nil
+    end
+  end
+
+  describe "parse_unverified/1" do
+    test "returns struct for valid event map" do
+      raw = Fixtures.raw_event_map()
+      event = Nostr.Event.parse_unverified(raw)
+
+      assert %Nostr.Event{} = event
+      assert event.kind == 1
+      assert event.id != nil
+    end
+
+    test "does not crash on out-of-range created_at" do
+      raw = Fixtures.raw_event_map()
+      raw = Map.put(raw, "created_at", 9_223_372_036_854_775_807)
+      event = Nostr.Event.parse_unverified(raw)
+
+      assert %Nostr.Event{} = event
+      assert event.id != nil
+      assert event.created_at == nil
+    end
+
+    test "does not crash on float created_at" do
+      raw = Fixtures.raw_event_map()
+      raw = Map.put(raw, "created_at", 1.0e10)
+      event = Nostr.Event.parse_unverified(raw)
+
+      assert %Nostr.Event{} = event
+      assert event.id != nil
+      assert %DateTime{} = event.created_at
+    end
+
+    test "does not crash on string created_at" do
+      raw = Fixtures.raw_event_map()
+      raw = Map.put(raw, "created_at", "not_a_number")
+      event = Nostr.Event.parse_unverified(raw)
+
+      assert %Nostr.Event{} = event
+      assert event.id != nil
+      assert event.created_at == nil
+    end
   end
 
   describe "parse_specific/1" do

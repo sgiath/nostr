@@ -1,0 +1,3 @@
+[auth]
+required = true
+mode = "bogus_mode"

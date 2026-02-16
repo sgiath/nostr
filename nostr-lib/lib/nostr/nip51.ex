@@ -186,6 +186,10 @@ defmodule Nostr.NIP51 do
       ["e", "event_id", "wss://relay.com"]
   """
   @spec tag_to_array(Tag.t() | list()) :: list()
+  def tag_to_array(%Tag{type: type, data: nil}) do
+    [Atom.to_string(type)]
+  end
+
   def tag_to_array(%Tag{type: type, data: data, info: []}) do
     [Atom.to_string(type), data]
   end
@@ -211,6 +215,7 @@ defmodule Nostr.NIP51 do
       |> Nostr.Crypto.decrypt(seckey, pubkey)
       |> JSON.decode!()
       |> Enum.map(&Tag.parse/1)
+      |> Enum.reject(&is_nil/1)
 
     {:ok, tags}
   rescue
@@ -222,7 +227,11 @@ defmodule Nostr.NIP51 do
       {:ok, plaintext} ->
         case JSON.decode(plaintext) do
           {:ok, arrays} ->
-            tags = Enum.map(arrays, &Tag.parse/1)
+            tags =
+              arrays
+              |> Enum.map(&Tag.parse/1)
+              |> Enum.reject(&is_nil/1)
+
             {:ok, tags}
 
           {:error, reason} ->

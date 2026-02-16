@@ -1,7 +1,7 @@
 defmodule Nostr.Relay.Repo.Migrations.CreateEventsAndTags do
   use Ecto.Migration
 
-  def up do
+  def change do
     create table(:events, primary_key: false) do
       add :event_id, :text, primary_key: true
       add :pubkey, :text, null: false
@@ -29,15 +29,5 @@ defmodule Nostr.Relay.Repo.Migrations.CreateEventsAndTags do
 
     create index(:event_tags, [:tag_name, :tag_value])
     create index(:event_tags, [:event_id])
-  end
-
-  def down do
-    drop table(:event_tags)
-    drop table(:events)
-
-    create table(:event_store, primary_key: false) do
-      add :event_id, :text, primary_key: true
-      add :raw_json, :binary, null: false
-    end
   end
 end

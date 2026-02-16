@@ -17,17 +17,19 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
 
   # --- helpers ---
 
-  defp insert!(opts) do
+  defp build_event(opts) do
     kind = Keyword.get(opts, :kind, 1)
     created_at = Keyword.get(opts, :created_at, ~U[2024-06-15 12:00:00Z])
     seckey = Keyword.get(opts, :seckey, @seckey_a)
     tags = Keyword.get(opts, :tags, [])
     content = Keyword.get(opts, :content, "test")
 
-    event =
-      Event.create(kind, created_at: created_at, tags: tags, content: content)
-      |> Event.sign(seckey)
+    Event.create(kind, created_at: created_at, tags: tags, content: content)
+    |> Event.sign(seckey)
+  end
 
+  defp insert!(opts) do
+    event = build_event(opts)
     :ok = Store.insert_event(event, [])
     event
   end
@@ -46,13 +48,15 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
   # --- ephemeral events ---
 
   describe "ephemeral events" do
-    test "kind 20000 not stored" do
+    test "kind 20000 hidden by read filters" do
       event = insert!(kind: 20_000)
+      assert event.id in stored_event_ids()
       assert query_ids(%Filter{ids: [event.id]}) == []
     end
 
-    test "kind 29999 not stored" do
+    test "kind 29999 hidden by read filters" do
       event = insert!(kind: 29_999)
+      assert event.id in stored_event_ids()
       assert query_ids(%Filter{ids: [event.id]}) == []
     end
   end
@@ -65,9 +69,9 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
       assert query_ids(%Filter{ids: [event.id]}) == [event.id]
     end
 
-    test "duplicate event_id returns :ok with one row" do
+    test "duplicate event_id returns :duplicate with one row" do
       event = insert!(kind: 1)
-      assert :ok = Store.insert_event(event, [])
+      assert :duplicate = Store.insert_event(event, [])
       assert stored_event_ids() == [event.id]
     end
   end
@@ -80,31 +84,41 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
       assert query_ids(%Filter{kinds: [0]}) == [event.id]
     end
 
-    test "newer replaces older" do
+    test "newer remains newest in query results, older is preserved" do
       old = insert!(kind: 0, created_at: ~U[2024-06-15 12:00:00Z])
-      new = insert!(kind: 0, created_at: ~U[2024-06-16 12:00:00Z])
+      new = build_event(kind: 0, created_at: ~U[2024-06-16 12:00:00Z])
+
+      assert :ok = Store.insert_event(new, [])
 
       ids = query_ids(%Filter{kinds: [0]})
       assert ids == [new.id]
-      refute old.id in stored_event_ids()
+      assert old.id in stored_event_ids()
+      assert new.id in stored_event_ids()
     end
 
-    test "older does not replace newer" do
+    test "older is appended and still not visible in query result" do
       new = insert!(kind: 0, created_at: ~U[2024-06-16 12:00:00Z])
-      _old = insert!(kind: 0, created_at: ~U[2024-06-15 12:00:00Z])
+      old = build_event(kind: 0, created_at: ~U[2024-06-15 12:00:00Z])
 
+      assert :ok = Store.insert_event(old, [])
       assert query_ids(%Filter{kinds: [0]}) == [new.id]
+      assert old.id in stored_event_ids()
+      assert new.id in stored_event_ids()
     end
 
-    test "same timestamp — lower id wins" do
+    test "same timestamp keeps lowest id visible" do
       ts = ~U[2024-06-15 12:00:00Z]
 
-      e1 = insert!(kind: 0, created_at: ts, content: "first")
-      e2 = insert!(kind: 0, created_at: ts, content: "second")
+      e1 = build_event(kind: 0, created_at: ts, content: "first")
+      e2 = build_event(kind: 0, created_at: ts, content: "second")
 
-      # Whichever has the lower id should survive
+      :ok = Store.insert_event(e1, [])
+      Store.insert_event(e2, [])
+
       winner = if e1.id < e2.id, do: e1, else: e2
       assert query_ids(%Filter{kinds: [0]}) == [winner.id]
+      assert e1.id in stored_event_ids()
+      assert e2.id in stored_event_ids()
     end
 
     test "different pubkeys coexist" do
@@ -156,7 +170,7 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
       assert query_ids(%Filter{kinds: [30_000]}) == [event.id]
     end
 
-    test "same d-tag — newer replaces" do
+    test "same d-tag keeps newest in query result" do
       old =
         insert!(
           kind: 30_000,
@@ -173,7 +187,27 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
 
       ids = query_ids(%Filter{kinds: [30_000]})
       assert ids == [new.id]
-      refute old.id in stored_event_ids()
+      assert old.id in stored_event_ids()
+      assert new.id in stored_event_ids()
+    end
+
+    test "older with same d-tag is appended and returns :ok" do
+      _new =
+        insert!(
+          kind: 30_000,
+          tags: [Tag.create(:d, "abc")],
+          created_at: ~U[2024-06-16 12:00:00Z]
+        )
+
+      old =
+        build_event(
+          kind: 30_000,
+          tags: [Tag.create(:d, "abc")],
+          created_at: ~U[2024-06-15 12:00:00Z]
+        )
+
+      assert :ok = Store.insert_event(old, [])
+      assert old.id in stored_event_ids()
     end
 
     test "different d-tags coexist" do
@@ -199,11 +233,16 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
     test "same d-tag, same timestamp — lower id wins" do
       ts = ~U[2024-06-15 12:00:00Z]
 
-      e1 = insert!(kind: 30_000, tags: [Tag.create(:d, "abc")], created_at: ts, content: "a")
-      e2 = insert!(kind: 30_000, tags: [Tag.create(:d, "abc")], created_at: ts, content: "b")
+      e1 = build_event(kind: 30_000, tags: [Tag.create(:d, "abc")], created_at: ts, content: "a")
+      e2 = build_event(kind: 30_000, tags: [Tag.create(:d, "abc")], created_at: ts, content: "b")
+
+      :ok = Store.insert_event(e1, [])
+      Store.insert_event(e2, [])
 
       winner = if e1.id < e2.id, do: e1, else: e2
       assert query_ids(%Filter{kinds: [30_000]}) == [winner.id]
+      assert e1.id in stored_event_ids()
+      assert e2.id in stored_event_ids()
     end
 
     test "empty d-tag replacement works" do
@@ -223,7 +262,8 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
 
       ids = query_ids(%Filter{kinds: [30_000]})
       assert ids == [new.id]
-      refute old.id in stored_event_ids()
+      assert old.id in stored_event_ids()
+      assert new.id in stored_event_ids()
     end
 
     test "missing d-tag treated as empty string" do
@@ -243,7 +283,8 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
 
       ids = query_ids(%Filter{kinds: [30_000]})
       assert ids == [new.id]
-      refute old.id in stored_event_ids()
+      assert old.id in stored_event_ids()
+      assert new.id in stored_event_ids()
     end
 
     test "different pubkeys with same d-tag coexist" do
@@ -322,7 +363,7 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
 
       assert query_ids(%Filter{kinds: [19_999]}) == [replaceable.id]
       assert query_ids(%Filter{kinds: [20_000]}) == []
-      refute ephemeral.id in stored_event_ids()
+      assert ephemeral.id in stored_event_ids()
     end
 
     test "kind 29999 is ephemeral, kind 30000 is parameterized replaceable" do
@@ -331,7 +372,7 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
       param =
         insert!(kind: 30_000, tags: [Tag.create(:d, "x")], created_at: ~U[2024-06-16 12:00:00Z])
 
-      refute ephemeral.id in stored_event_ids()
+      assert ephemeral.id in stored_event_ids()
       assert query_ids(%Filter{kinds: [30_000]}) == [param.id]
     end
 
@@ -344,7 +385,8 @@ defmodule Nostr.Relay.Store.ReplaceableTest do
 
       # 39999: only latest survives
       assert query_ids(%Filter{kinds: [39_999]}) == [p2.id]
-      refute p1.id in stored_event_ids()
+      assert p1.id in stored_event_ids()
+      assert p2.id in stored_event_ids()
 
       # 40000: both survive (regular)
       r1 = insert!(kind: 40_000, created_at: ~U[2024-06-17 12:00:00Z])

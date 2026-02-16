@@ -135,7 +135,9 @@ defmodule Nostr.Event.Rumor do
   end
 
   defp parse_tags(tags) when is_list(tags) do
-    Enum.map(tags, &Nostr.Tag.parse/1)
+    tags
+    |> Enum.map(&Nostr.Tag.parse/1)
+    |> Enum.reject(&is_nil/1)
   end
 
   defp parse_tags(_invalid_tags), do: []

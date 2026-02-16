@@ -38,7 +38,10 @@ defmodule Nostr.Test.Fixtures do
       "pubkey" => event.pubkey,
       "kind" => event.kind,
       "tags" =>
-        Enum.map(event.tags, fn tag -> [Atom.to_string(tag.type), tag.data | tag.info] end),
+        Enum.map(event.tags, fn
+          %{type: type, data: nil} -> [Atom.to_string(type)]
+          %{type: type, data: data, info: info} -> [Atom.to_string(type), data | info]
+        end),
       "created_at" => DateTime.to_unix(event.created_at),
       "content" => event.content,
       "sig" => event.sig

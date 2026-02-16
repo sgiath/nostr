@@ -26,3 +26,6 @@ nostr_relay-*.tar
 *.db
 *.db-shm
 *.db-wal
+
+# User relay config (use relay.toml.example as template)
+config/relay.toml

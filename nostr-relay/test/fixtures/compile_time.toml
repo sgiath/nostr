@@ -1,0 +1,7 @@
+[relay]
+name = "Override Name"
+software = "evil_relay"
+version = "9.9.9"
+
+[nips]
+supported = [1, 11, 42]

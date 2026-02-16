@@ -11,7 +11,9 @@ defmodule Nostr.Relay.Pipeline.Engine do
   Stage sequence can be overridden via the `:stages` option, which defaults to:
 
   - `ProtocolValidator`
+  - `AuthEnforcer`
   - `MessageValidator`
+  - `EventValidator`
   - `RelayPolicyValidator`
   - `MessageHandler`
   - `StorePolicy`
@@ -31,7 +33,9 @@ defmodule Nostr.Relay.Pipeline.Engine do
 
   @default_stages [
     Nostr.Relay.Pipeline.Stages.ProtocolValidator,
+    Nostr.Relay.Pipeline.Stages.AuthEnforcer,
     Nostr.Relay.Pipeline.Stages.MessageValidator,
+    Nostr.Relay.Pipeline.Stages.EventValidator,
     Nostr.Relay.Pipeline.Stages.RelayPolicyValidator,
     Nostr.Relay.Pipeline.Stages.MessageHandler,
     Nostr.Relay.Pipeline.Stages.StorePolicy
@@ -114,6 +118,14 @@ defmodule Nostr.Relay.Pipeline.Engine do
     finalize_error(%Context{error: :invalid_stage_result})
   end
 
+  # When a stage queues response frames (e.g. EventValidator adding an OK rejection),
+  # push those instead of generating a generic NOTICE.
+  defp finalize_error(%Context{frames: frames, connection_state: state})
+       when is_list(frames) and frames != [] do
+    Logger.debug("[pipeline] step=finalize status=error frames=#{length(frames)}")
+    {:push, frames, state}
+  end
+
   defp finalize_error(%Context{error: reason, connection_state: state}) do
     notice_reason = if is_atom(reason), do: reason, else: :request_rejected
 
@@ -132,10 +144,35 @@ defmodule Nostr.Relay.Pipeline.Engine do
     {:push, frames, state}
   end
 
+  defp notice_message(:prefix_too_short),
+    do: Message.notice("restricted: filter prefix too short")
+
   defp notice_message(:invalid_message_format), do: Message.notice("invalid message format")
+
+  defp notice_message(:unsupported_json_escape),
+    do: Message.notice("invalid message: unsupported JSON escape")
+
+  defp notice_message(:unsupported_json_literals),
+    do: Message.notice("invalid message: unsupported JSON literal control")
+
   defp notice_message(:unsupported_message_type), do: Message.notice("unsupported message type")
+
+  defp notice_message(:invalid_event_id),
+    do: Message.notice("invalid: event ID does not match hash")
+
+  defp notice_message(:invalid_event_created_at),
+    do: Message.notice("invalid: invalid created_at")
+
+  defp notice_message(:invalid_event_sig),
+    do: Message.notice("invalid: event signature verification failed")
+
   defp notice_message(:query_failed), do: Message.notice("could not query events")
   defp notice_message(:insert_failed), do: Message.notice("could not store event")
+
+  defp notice_message(:auth_required),
+    do: Message.notice("auth-required: please authenticate")
+
+  defp notice_message(:auth_failed), do: Message.notice("auth-required: authentication failed")
 
   defp notice_message(:invalid_stage_result), do: Message.notice("invalid pipeline result")
 

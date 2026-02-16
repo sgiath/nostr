@@ -1,0 +1,4 @@
+[auth]
+required = true
+mode = "denylist"
+denylist = ["badpubkey"]

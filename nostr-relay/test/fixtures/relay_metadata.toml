@@ -1,0 +1,5 @@
+[relay]
+name = "Test Relay"
+description = "A test relay"
+pubkey = "aabbccdd"
+contact = "mailto:test@example.com"

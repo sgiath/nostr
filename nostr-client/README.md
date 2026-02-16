@@ -128,7 +128,7 @@ Notes:
 If [available in Hex](https://hex.pm/docs/publish), the package can be installed
 by adding `nostr_client` to your list of dependencies in `mix.exs`:
 
-```elixir
+````elixir
 def deps do
   [
     {:nostr_client, "~> 0.1.0"}
@@ -141,7 +141,7 @@ Use one command from the repository root to run e2e tests against a local relay:
 
 ```bash
 ./e2e
-```
+````
 
 The script starts `nostr-relay`, configures `NOSTR_E2E_RELAY_URL`, runs
 `mix test --include external` inside `nostr-client`, and shuts the relay down on
@@ -159,8 +159,10 @@ NOSTR_E2E_RELAY_URL=ws://127.0.0.1:4002/ mix test --include external
 
 `mix test` (without `--include external`) continues to skip all `:external` tests by
 default via `nostr-client/test/test_helper.exs`.
+
 ```
 
 Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
 and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
 be found at <https://hexdocs.pm/nostr_client>.
+```

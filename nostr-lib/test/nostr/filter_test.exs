@@ -63,6 +63,22 @@ defmodule Nostr.FilterTest do
       assert filter.until == ~U[2001-09-09 01:46:40Z]
     end
 
+    test "drops out-of-range timestamps instead of crashing" do
+      raw = %{since: 9_223_372_036_854_775_807, until: 1_000_000_000}
+      filter = Nostr.Filter.parse(raw)
+
+      assert filter.since == nil
+      assert filter.until == ~U[2001-09-09 01:46:40Z]
+    end
+
+    test "handles float timestamps from scientific notation" do
+      raw = %{since: 1.0e9, until: 1.0e10}
+      filter = Nostr.Filter.parse(raw)
+
+      assert filter.since == ~U[2001-09-09 01:46:40Z]
+      assert %DateTime{} = filter.until
+    end
+
     test "parses filter with tag filters" do
       raw = %{
         "#e": ["event1", "event2"],
@@ -175,6 +191,246 @@ defmodule Nostr.FilterTest do
       assert decoded["#t"] == ["nostr"]
       assert decoded["#g"] == ["geohash"]
       refute Map.has_key?(decoded, "tags")
+    end
+  end
+
+  describe "matches?/2" do
+    test "empty filter matches any event" do
+      event = Fixtures.signed_event()
+      filter = %Nostr.Filter{}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches by kind" do
+      event = Fixtures.signed_event(kind: 1)
+      filter = %Nostr.Filter{kinds: [1, 7]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "rejects non-matching kind" do
+      event = Fixtures.signed_event(kind: 1)
+      filter = %Nostr.Filter{kinds: [7, 30_023]}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches by author (exact)" do
+      event = Fixtures.signed_event()
+      filter = %Nostr.Filter{authors: [Fixtures.pubkey()]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches by author prefix" do
+      event = Fixtures.signed_event()
+      prefix = String.slice(Fixtures.pubkey(), 0, 8)
+      filter = %Nostr.Filter{authors: [prefix]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "rejects non-matching author" do
+      event = Fixtures.signed_event()
+      filter = %Nostr.Filter{authors: [Fixtures.pubkey2()]}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches by id prefix" do
+      event = Fixtures.signed_event()
+      prefix = String.slice(event.id, 0, 8)
+      filter = %Nostr.Filter{ids: [prefix]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "rejects non-matching id" do
+      event = Fixtures.signed_event()
+      filter = %Nostr.Filter{ids: ["0000000000000000"]}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches since constraint" do
+      event = Fixtures.signed_event(created_at: ~U[2024-06-15 00:00:00Z])
+      filter = %Nostr.Filter{since: ~U[2024-01-01 00:00:00Z]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches since at exact boundary" do
+      event = Fixtures.signed_event(created_at: ~U[2024-01-01 00:00:00Z])
+      filter = %Nostr.Filter{since: ~U[2024-01-01 00:00:00Z]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "rejects event before since" do
+      event = Fixtures.signed_event(created_at: ~U[2023-06-01 00:00:00Z])
+      filter = %Nostr.Filter{since: ~U[2024-01-01 00:00:00Z]}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches until constraint" do
+      event = Fixtures.signed_event(created_at: ~U[2024-01-01 00:00:00Z])
+      filter = %Nostr.Filter{until: ~U[2024-06-01 00:00:00Z]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "rejects event after until" do
+      event = Fixtures.signed_event(created_at: ~U[2025-01-01 00:00:00Z])
+      filter = %Nostr.Filter{until: ~U[2024-06-01 00:00:00Z]}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches #e tag filter" do
+      event = Fixtures.signed_event(tags: [Nostr.Tag.create(:e, "abc123")])
+      filter = %Nostr.Filter{"#e": ["abc123", "def456"]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "rejects when #e tag not present" do
+      event = Fixtures.signed_event(tags: [])
+      filter = %Nostr.Filter{"#e": ["abc123"]}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches #p tag filter" do
+      event = Fixtures.signed_event(tags: [Nostr.Tag.create(:p, Fixtures.pubkey2())])
+      filter = %Nostr.Filter{"#p": [Fixtures.pubkey2()]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "matches dynamic tag filter" do
+      event = Fixtures.signed_event(tags: [Nostr.Tag.create(:t, "nostr")])
+      filter = %Nostr.Filter{tags: %{"#t" => ["nostr", "bitcoin"]}}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "rejects non-matching dynamic tag" do
+      event = Fixtures.signed_event(tags: [Nostr.Tag.create(:t, "elixir")])
+      filter = %Nostr.Filter{tags: %{"#t" => ["nostr", "bitcoin"]}}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "AND semantics — all fields must match" do
+      event = Fixtures.signed_event(kind: 1)
+      filter = %Nostr.Filter{kinds: [1], authors: [Fixtures.pubkey2()]}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "AND semantics — both fields match" do
+      event = Fixtures.signed_event(kind: 1)
+      filter = %Nostr.Filter{kinds: [1], authors: [Fixtures.pubkey()]}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+  end
+
+  describe "search matching (NIP-50)" do
+    test "matches when content contains search term" do
+      event = Fixtures.signed_event(content: "the best nostr apps for beginners")
+      filter = %Nostr.Filter{search: "nostr"}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "does not match when content lacks search term" do
+      event = Fixtures.signed_event(content: "hello world")
+      filter = %Nostr.Filter{search: "nostr"}
+
+      refute Nostr.Filter.matches?(filter, event)
+    end
+
+    test "nil search always matches" do
+      event = Fixtures.signed_event(content: "anything")
+      filter = %Nostr.Filter{search: nil}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "empty search always matches" do
+      event = Fixtures.signed_event(content: "anything")
+      filter = %Nostr.Filter{search: ""}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "case insensitive matching" do
+      event = Fixtures.signed_event(content: "NOSTR is Great")
+      filter = %Nostr.Filter{search: "nostr great"}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "multi-term AND semantics" do
+      event = Fixtures.signed_event(content: "nostr apps are the best")
+
+      assert Nostr.Filter.matches?(%Nostr.Filter{search: "nostr best"}, event)
+      refute Nostr.Filter.matches?(%Nostr.Filter{search: "nostr missing"}, event)
+    end
+
+    test "extension tokens are ignored" do
+      event = Fixtures.signed_event(content: "nostr is great")
+      filter = %Nostr.Filter{search: "nostr language:en"}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "only extension tokens matches everything" do
+      event = Fixtures.signed_event(content: "anything")
+      filter = %Nostr.Filter{search: "language:en domain:example.com"}
+
+      assert Nostr.Filter.matches?(filter, event)
+    end
+
+    test "search combined with other filter fields" do
+      event = Fixtures.signed_event(kind: 1, content: "nostr is awesome")
+
+      assert Nostr.Filter.matches?(%Nostr.Filter{search: "nostr", kinds: [1]}, event)
+      refute Nostr.Filter.matches?(%Nostr.Filter{search: "nostr", kinds: [7]}, event)
+      refute Nostr.Filter.matches?(%Nostr.Filter{search: "missing", kinds: [1]}, event)
+    end
+  end
+
+  describe "any_match?/2" do
+    test "returns true when any filter matches (OR semantics)" do
+      event = Fixtures.signed_event(kind: 1)
+
+      filters = [
+        %Nostr.Filter{kinds: [7]},
+        %Nostr.Filter{kinds: [1]}
+      ]
+
+      assert Nostr.Filter.any_match?(filters, event)
+    end
+
+    test "returns false when no filter matches" do
+      event = Fixtures.signed_event(kind: 1)
+
+      filters = [
+        %Nostr.Filter{kinds: [7]},
+        %Nostr.Filter{kinds: [30_023]}
+      ]
+
+      refute Nostr.Filter.any_match?(filters, event)
+    end
+
+    test "empty filter list returns false" do
+      event = Fixtures.signed_event()
+
+      refute Nostr.Filter.any_match?([], event)
     end
   end
 

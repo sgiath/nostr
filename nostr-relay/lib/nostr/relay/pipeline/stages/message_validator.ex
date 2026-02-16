@@ -10,6 +10,7 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageValidator do
     list of `Nostr.Filter` structs
   - `{:count, sub_id, filters}` with the same filter constraints as `:req`
   - `{:close, sub_id}` where `sub_id` is binary
+  - `{:auth, term()}` (NIP-42 authentication)
   """
 
   alias Nostr.Event
@@ -44,6 +45,9 @@ defmodule Nostr.Relay.Pipeline.Stages.MessageValidator do
         end
 
       {:close, sub_id} when is_binary(sub_id) ->
+        {:ok, context}
+
+      {:auth, _} ->
         {:ok, context}
 
       _unsupported ->
