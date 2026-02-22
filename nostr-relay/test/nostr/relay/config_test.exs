@@ -116,6 +116,7 @@ defmodule Nostr.Relay.ConfigTest do
       [limits]
       max_subscriptions = 50
       min_prefix_length = 8
+      min_pow_difficulty = 20
       """
 
       path = write_fixture("limits.toml", toml)
@@ -127,6 +128,7 @@ defmodule Nostr.Relay.ConfigTest do
       limits = Keyword.get(info, :limits)
       assert limits[:max_subscriptions] == 50
       assert limits[:min_prefix_length] == 8
+      assert limits[:min_pow_difficulty] == 20
       # Existing defaults preserved
       assert limits[:max_limit] == 10_000
     end

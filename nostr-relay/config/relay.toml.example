@@ -24,6 +24,7 @@ max_subscriptions = 100
 max_filters = 100
 max_limit = 10_000
 min_prefix_length = 4
+min_pow_difficulty = 0
 
 # NIP-42 Authentication
 # The relay always sends an AUTH challenge on every new connection so clients
@@ -39,7 +40,6 @@ min_prefix_length = 4
 [auth]
 # required = false
 # mode = "none"
-# timeout_seconds = 30
 # whitelist = ["hex-pubkey-1", "hex-pubkey-2"]
 # denylist  = ["hex-pubkey-3"]
 

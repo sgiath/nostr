@@ -1,3 +1,4 @@
 [limits]
 max_subscriptions = 50
 min_prefix_length = 8
+min_pow_difficulty = 20

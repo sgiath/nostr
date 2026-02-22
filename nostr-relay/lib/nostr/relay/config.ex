@@ -13,7 +13,13 @@ defmodule Nostr.Relay.Config do
 
   @relay_info_keys [:name, :description, :pubkey, :contact, :url, :supported_nips]
   @relay_identity_keys [:self_pub, :self_sec]
-  @limit_keys [:max_subscriptions, :max_filters, :max_limit, :min_prefix_length]
+  @limit_keys [
+    :max_subscriptions,
+    :max_filters,
+    :max_limit,
+    :min_prefix_length,
+    :min_pow_difficulty
+  ]
   @auth_keys [:required, :mode, :timeout_seconds, :whitelist, :denylist]
   @nip29_keys [
     :enabled,

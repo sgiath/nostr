@@ -1,78 +1,64 @@
-# Nostr Relay (Intent Only)
+# Nostr Relay
 
 ## Status
 
-- This directory is currently a **planning-and-requirements** target, not a production relay implementation yet.
-- Repository intent: build a production-leaning Nostr relay using `:bandit` and shared primitives from `nostr-lib`.
-- Implementation files are being prepared separately; this README is the source of truth for the relay roadmap today.
+The relay is implemented and running with a pipeline-based websocket message path,
+SQLite persistence, and NIP-11 metadata.
 
-## Planned Relay Scope
+Core request lifecycle (`EVENT`, `REQ`, `COUNT`, `CLOSE`, `AUTH`) is covered by
+unit tests, plus opt-in websocket integration tests.
 
-- WebSocket entrypoint for NIP-01 `EVENT`, `REQ`, `CLOSE`, and related message flow.
-- SQLite-backed event persistence and filter matching.
-- Relay metadata/`INFO`, publishing policy, limits, and request controls.
-- Monitoring, tests, and deployment docs.
+## Implemented NIPs
 
-## Relay-NIP Mapping (Current Intent)
+The relay currently advertises these NIPs in NIP-11 metadata by default:
 
-- Mandatory baseline: `NIP-01` (relay protocol + filter semantics)
-- Policy and relay metadata endpoint: `NIP-11`
-- Optional but planned: `NIP-09` (delete requests), `NIP-13` (PoW),
-  `NIP-42` (AUTH), `NIP-45` (COUNT)
+- `NIP-01` protocol framing, subscriptions, and event flow
+- `NIP-02` contact-list compatible replaceable handling
+- `NIP-04` private direct-message visibility rules
+- `NIP-09` deletion events (write restrictions + read-path suppression)
+- `NIP-11` relay metadata endpoint (`GET /` with `Accept: application/nostr+json`)
+- `NIP-13` proof-of-work policy
+- `NIP-17` private-message compatibility support
+- `NIP-28` public-channel compatibility support
+- `NIP-40` expiration filtering
+- `NIP-42` AUTH challenge + authentication gate
+- `NIP-45` COUNT queries
+- `NIP-50` search filter support
+- `NIP-59` gift-wrap recipient validation
+- `NIP-70` protected-event publish restriction
 
-## Milestone Plan
+Optional/config-gated support:
 
-1. **M1: Protocol bootstrap**
-   - HTTP `/` and websocket routes wired via Bandit/WebSock.
-   - Parse/serialize all `Nostr.Message` variants used by NIP-01.
-   - Unit tests for parse/serialize round trips.
+- `NIP-29` relay-based groups (advertised only when enabled)
 
-2. **M2: Filter + store first slice**
-   - Deterministic SQLite-backed event store with ordered `REQ` replay.
-   - Implement `NIP-01` filters (`ids`, `authors`, `kinds`, `#x`, `since`, `until`, `limit`).
-   - Store migration + startup bootstrap for relay database path/config.
-   - `EOSE` sent exactly once per subscription request.
+## Implemented Relay Features
 
-3. **M3: Publish / subscribe flow**
-   - Accept `EVENT`, persist where possible, send `OK` and dispatch events to matching subs.
-   - Handle `CLOSE` idempotently and clean up state.
-   - Include relay-side reasons for failure using standardized prefixes.
+- HTTP + WebSocket entrypoint with Bandit/WebSock (`/`)
+- NIP-11 relay info document with dynamic `supported_nips` and relay limits
+- Per-connection websocket state and subscription tracking
+- Deterministic SQLite-backed event store with Ecto migrations
+- Pipeline stages for protocol parse, auth enforcement, event validation, relay policy,
+  group policy, store policy, and message handling
+- End-to-end `EVENT` -> `OK`, `REQ` -> `EVENT` replay + `EOSE`, `COUNT`, and `CLOSE`
+- Live fan-out of newly stored events to matching active subscriptions
+- Replaceable + parameterized-replaceable stale-event rejection semantics
+- Authentication modes (`none`, `whitelist`, `denylist`) with timeout enforcement
+- Policy checks for filter prefix length, protected events, deletion ownership,
+  gift-wrap recipient tags, PoW difficulty+commitment, and optional group write checks
 
-4. **M4: Relay controls + info**
-   - Add `NIP-11` `/` metadata response with supported NIPs and limits. **(Implemented.)**
-   - Add basic rate/size/write limits and consistent `NOTICE/CLOSED` policy reasons.
-
-5. **M5: Optional protocol expansions**
-   - Add `COUNT`, delete handling, `AUTH` flow, and PoW policy checks as configuration-gated features.
-   - Introduce targeted integration tests per NIP.
-
-6. **M6: Persistence hardening**
-   - Add indexes and retention/cleanup policies for the SQLite event store.
-   - Add operational hooks, restart behavior, and observability.
-
-## Tracer Bullet for Next Step
-
-Start with a single slice in M1: websocket connect + parse incoming `REQ`, persist a single event to sqlite and return it through `EVENT` + `EOSE`, then expand to `EVENT` publish + `OK`.
-
-## Quick Start (Intended)
-
-Planned run target:
+## Quick Start
 
 ```bash
+mix deps.get
 mix ecto.create
 mix ecto.migrate
-mix deps.get
 mix compile
 mix run --no-halt
 ```
 
-The command set above is the **target shape**; code is not yet complete.
-
 ## Runtime Database Setup
 
-The relay now uses an Ecto migration for its SQLite schema:
-
-- `priv/repo/migrations/20260215000001_create_relay_events.exs`
+SQLite schema is managed through Ecto migrations in `priv/repo/migrations/`.
 
 Before first run (or after a fresh clone), prepare the DB once:
 
@@ -81,52 +67,20 @@ mix ecto.create
 mix ecto.migrate
 ```
 
-The `nostr-relay` test helper also runs these two commands before `ExUnit.start/0`.
+The test helper also runs these commands before `ExUnit.start/0`.
 
-## Current Runtime Semantics
+## Testing
 
-- Each HTTP request to `/` flows through `Nostr.Relay.Web.Router`.
-  - A valid WebSocket request is upgraded with `Plug.Conn.upgrade_adapter/3` and handled by
-    `Nostr.Relay.Web.SocketHandler`.
-  - If the request accepts `application/nostr+json`, a NIP-11 metadata document is returned.
-- `WebSock` treats `SocketHandler` as a per-connection process callback, so each incoming
-  connection gets its own state struct.
-- `SocketHandler` delegates frame routing to `Nostr.Relay.Web.MessageRouter` and
-  per-connection state updates to `Nostr.Relay.Web.ConnectionState`.
-
-This means the project is currently in a good shape for future relay expansion: message parsing,
-connection lifecycle hooks, and per-connection subscription state are all isolated from one another.
-
-Suggested refactors before full relay logic:
-
-1. Add a websocket integration smoke test across two real websocket connections (tagged `:integration`).
-2. Keep `SocketHandler` transport-only and add protocol logic only through
-   `Nostr.Relay.Web.MessageRouter`.
-3. Extend `Nostr.Relay.Web.ConnectionState` with persistence, limits, and per-connection policy
-   counters as relay behavior grows.
-
-## Contributing Notes
-
-- Follow `nostr-lib` style guidance for all relay-related modules when implementation begins.
-- Keep protocol behavior incremental (small tracer bullets), then expand to feature-complete relay behavior.
-
-## Testing Conventions
-
-- Unit tests and callback/router tests are part of the default test run.
-- Real websocket integration coverage is tagged with `:integration` in `test/nostr/relay/web/websocket_smoke_integration_test.exs`.
-- Integration tests are opt-in by default:
+- Default test run excludes integration tests
+- Integration websocket tests are tagged `:integration`
 
 ```bash
-mix test              # excludes @tag :integration
-mix test --only integration  # run websocket integration test
+mix test
+mix test --only integration
+mix check --fix
 ```
 
-### Concurrency Invariant
+## Current Focus
 
-- Per-connection checks already validate state isolation:
-  - `test/nostr/relay/web/message_router_test.exs` validates identical subscription IDs are scoped to each state.
-  - `test/nostr/relay/web/websocket_smoke_integration_test.exs` runs two websocket clients in parallel to confirm independent flows.
-
-## Next Action
-
-- Draft `nostr-relay` milestone tickets and wire them to test files before any runtime implementation.
+- Storage hardening: indexes, compaction, retention, and recovery behavior
+- Additional deployment and observability guidance

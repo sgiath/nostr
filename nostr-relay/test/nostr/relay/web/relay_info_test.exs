@@ -23,6 +23,7 @@ defmodule Nostr.Relay.Web.RelayInfoTest do
 
     metadata = RelayInfo.metadata()
     refute 29 in metadata["supported_nips"]
+    assert 13 in metadata["supported_nips"]
     assert 70 in metadata["supported_nips"]
   end
 
@@ -32,14 +33,16 @@ defmodule Nostr.Relay.Web.RelayInfoTest do
 
     metadata = RelayInfo.metadata()
     assert 29 in metadata["supported_nips"]
+    assert 13 in metadata["supported_nips"]
     assert 70 in metadata["supported_nips"]
   end
 
-  test "always advertises NIP-70 even when omitted in config" do
+  test "always advertises NIP-13 and NIP-70 even when omitted in config" do
     Application.put_env(:nostr_relay, :relay_info, supported_nips: [1, 11, 42])
     Application.put_env(:nostr_relay, :nip29, enabled: false)
 
     metadata = RelayInfo.metadata()
+    assert 13 in metadata["supported_nips"]
     assert 70 in metadata["supported_nips"]
   end
 
