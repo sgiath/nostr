@@ -49,6 +49,7 @@ defmodule Nostr.Event.Parser do
   - Kind 10101: `Nostr.Event.GoodWikiAuthors` (NIP-51)
   - Kind 10102: `Nostr.Event.GoodWikiRelays` (NIP-51)
   - Kind 22242: `Nostr.Event.ClientAuth` (NIP-42)
+  - Kind 27235: `Nostr.Event.HttpAuth` (NIP-98)
   - Kind 30000: `Nostr.Event.FollowSets` (NIP-51)
   - Kind 30002: `Nostr.Event.RelaySets` (NIP-51)
   - Kind 30003: `Nostr.Event.BookmarkSets` (NIP-51)
@@ -178,6 +179,7 @@ defmodule Nostr.Event.Parser do
 
   # Other replaceable events
   def parse_specific(%Event{kind: 22_242} = event), do: Event.ClientAuth.parse(event)
+  def parse_specific(%Event{kind: 27_235} = event), do: Event.HttpAuth.parse(event)
 
   # NIP-51 Parameterized Sets (30000-39999)
   def parse_specific(%Event{kind: 30_000} = event), do: Event.FollowSets.parse(event)
