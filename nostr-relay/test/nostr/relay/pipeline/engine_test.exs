@@ -31,6 +31,29 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
              } = Engine.run("{bad json", state)
     end
 
+    test "returns NOTICE when payload exceeds max_message_length" do
+      original_relay_info = Application.get_env(:nostr_relay, :relay_info)
+
+      on_exit(fn ->
+        Application.put_env(:nostr_relay, :relay_info, original_relay_info)
+      end)
+
+      set_max_message_length(16)
+
+      state = ConnectionState.new()
+      payload = String.duplicate("a", 17)
+
+      expected =
+        Message.notice("message too large")
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(payload, state)
+    end
+
     test "returns NOTICE for parseable unsupported messages" do
       state = ConnectionState.new()
 
@@ -105,6 +128,66 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
                [{:text, ^expected}],
                %ConnectionState{messages: 1}
              } = Engine.run(payload, state)
+    end
+
+    test "returns NOTICE when subscription id exceeds max_subid_length" do
+      original_relay_info = Application.get_env(:nostr_relay, :relay_info)
+
+      on_exit(fn ->
+        Application.put_env(:nostr_relay, :relay_info, original_relay_info)
+      end)
+
+      relay_info = Application.get_env(:nostr_relay, :relay_info, [])
+      limitation = Keyword.get(relay_info, :limitation, %{})
+
+      Application.put_env(
+        :nostr_relay,
+        :relay_info,
+        Keyword.put(relay_info, :limitation, Map.put(limitation, :max_subid_length, 3))
+      )
+
+      state = ConnectionState.new()
+
+      payload =
+        %Filter{}
+        |> Message.request("sub-1")
+        |> Message.serialize()
+
+      expected =
+        Message.notice("restricted: subscription id too long")
+        |> Message.serialize()
+
+      assert {
+               :push,
+               [{:text, ^expected}],
+               %ConnectionState{messages: 1}
+             } = Engine.run(payload, state)
+    end
+
+    test "returns OK false when event content exceeds max_content_length" do
+      original_relay_info = Application.get_env(:nostr_relay, :relay_info)
+
+      on_exit(fn ->
+        Application.put_env(:nostr_relay, :relay_info, original_relay_info)
+      end)
+
+      set_max_content_length(5)
+
+      state = ConnectionState.new()
+      event = valid_event(content: "hello!")
+
+      payload =
+        event
+        |> Message.create_event()
+        |> Message.serialize()
+
+      event_id = event.id
+
+      assert {:push, [{:text, ok_json}], %ConnectionState{messages: 1}} =
+               Engine.run(payload, state)
+
+      assert ["OK", ^event_id, false, "restricted: max content length exceeded"] =
+               JSON.decode!(ok_json)
     end
 
     test "accepts valid EVENT messages through default stages" do
@@ -860,5 +943,29 @@ defmodule Nostr.Relay.Pipeline.EngineTest do
   defp set_auth_mode(mode) do
     auth = Application.get_env(:nostr_relay, :auth, [])
     Application.put_env(:nostr_relay, :auth, Keyword.put(auth, :mode, mode))
+  end
+
+  defp set_max_message_length(max_message_length) when is_integer(max_message_length) do
+    relay_info = Application.get_env(:nostr_relay, :relay_info, [])
+    limitation = Keyword.get(relay_info, :limitation, %{})
+    new_limitation = Map.put(limitation, :max_message_length, max_message_length)
+
+    Application.put_env(
+      :nostr_relay,
+      :relay_info,
+      Keyword.put(relay_info, :limitation, new_limitation)
+    )
+  end
+
+  defp set_max_content_length(max_content_length) when is_integer(max_content_length) do
+    relay_info = Application.get_env(:nostr_relay, :relay_info, [])
+    limitation = Keyword.get(relay_info, :limitation, %{})
+    new_limitation = Map.put(limitation, :max_content_length, max_content_length)
+
+    Application.put_env(
+      :nostr_relay,
+      :relay_info,
+      Keyword.put(relay_info, :limitation, new_limitation)
+    )
   end
 end

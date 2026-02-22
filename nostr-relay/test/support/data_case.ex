@@ -28,6 +28,14 @@ defmodule Nostr.Relay.DataCase do
 
   setup tags do
     Nostr.Relay.DataCase.setup_sandbox(tags)
+
+    original_relay_info = Application.get_env(:nostr_relay, :relay_info)
+    set_permissive_created_at_limits()
+
+    on_exit(fn ->
+      Application.put_env(:nostr_relay, :relay_info, original_relay_info)
+    end)
+
     :ok
   end
 
@@ -55,5 +63,21 @@ defmodule Nostr.Relay.DataCase do
         |> to_string()
       end)
     end)
+  end
+
+  defp set_permissive_created_at_limits do
+    relay_info = Application.get_env(:nostr_relay, :relay_info, [])
+    limitation = Keyword.get(relay_info, :limitation, %{})
+
+    updated_limitation =
+      limitation
+      |> Map.put(:created_at_lower_limit, 3_153_600_000)
+      |> Map.put(:created_at_upper_limit, 3_153_600_000)
+
+    Application.put_env(
+      :nostr_relay,
+      :relay_info,
+      Keyword.put(relay_info, :limitation, updated_limitation)
+    )
   end
 end

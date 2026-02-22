@@ -7,7 +7,3 @@ config :nostr_relay, :server,
   port: 4000
 
 config :nostr_relay, config_path: "~/.config/nostr-relay/relay.toml"
-
-config :nostr_relay, :relay_info,
-  name: "Nostr Relay",
-  description: "A focused, test-first Nostr relay implementation."

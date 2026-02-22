@@ -11,15 +11,37 @@ defmodule Nostr.Relay.Config do
 
   require Logger
 
-  @relay_info_keys [:name, :description, :pubkey, :contact, :url, :supported_nips]
-  @relay_identity_keys [:self_pub, :self_sec]
-  @limit_keys [
-    :max_subscriptions,
-    :max_filters,
-    :max_limit,
-    :min_prefix_length,
-    :min_pow_difficulty
+  @relay_info_keys [
+    :name,
+    :description,
+    :banner,
+    :icon,
+    :pubkey,
+    :contact,
+    :url,
+    :software,
+    :version,
+    :supported_nips,
+    :terms_of_service,
+    :payments_url,
+    :fees
   ]
+  @relay_identity_keys [:self_pub, :self_sec]
+  @limitation_keys [
+    :max_message_length,
+    :max_subscriptions,
+    :max_limit,
+    :max_subid_length,
+    :max_event_tags,
+    :max_content_length,
+    :min_pow_difficulty,
+    :payment_required,
+    :restricted_writes,
+    :created_at_lower_limit,
+    :created_at_upper_limit,
+    :default_limit
+  ]
+  @relay_policy_keys [:min_prefix_length]
   @auth_keys [:required, :mode, :timeout_seconds, :whitelist, :denylist]
   @nip29_keys [
     :enabled,
@@ -76,7 +98,8 @@ defmodule Nostr.Relay.Config do
         merge_relay_identity(toml)
         merge_server(toml)
         merge_database(toml)
-        merge_limits(toml)
+        merge_limitation(toml)
+        merge_relay_policy(toml)
         merge_auth(toml)
         merge_nip29(toml)
         :ok
@@ -101,16 +124,30 @@ defmodule Nostr.Relay.Config do
 
   defp merge_relay_info(_toml), do: :ok
 
-  defp normalize_relay_info(%{supported_nips: supported_nips} = relay)
+  defp normalize_relay_info(relay) do
+    relay
+    |> normalize_supported_nips_key()
+    |> normalize_map_key(:fees)
+  end
+
+  defp normalize_supported_nips_key(%{supported_nips: supported_nips} = relay)
        when is_list(supported_nips) do
     Map.put(relay, :supported_nips, normalize_supported_nips(supported_nips))
   end
 
-  defp normalize_relay_info(%{supported_nips: _invalid} = relay) do
+  defp normalize_supported_nips_key(%{supported_nips: _invalid} = relay) do
     Map.delete(relay, :supported_nips)
   end
 
-  defp normalize_relay_info(relay), do: relay
+  defp normalize_supported_nips_key(relay), do: relay
+
+  defp normalize_map_key(relay, key) do
+    case Map.fetch(relay, key) do
+      {:ok, value} when is_map(value) -> relay
+      {:ok, _invalid} -> Map.delete(relay, key)
+      :error -> relay
+    end
+  end
 
   defp normalize_supported_nips(supported_nips) when is_list(supported_nips) do
     supported_nips
@@ -177,14 +214,65 @@ defmodule Nostr.Relay.Config do
     Application.put_env(:nostr_relay, Nostr.Relay.Repo, Keyword.put(current, :database, expanded))
   end
 
-  defp merge_limits(%{limits: limits}) when is_map(limits) do
+  defp merge_limitation(toml) when is_map(toml) do
     current = Application.get_env(:nostr_relay, :relay_info, [])
-    current_limits = Keyword.get(current, :limits, %{})
-    new_limits = Map.merge(current_limits, Map.take(limits, @limit_keys))
-    Application.put_env(:nostr_relay, :relay_info, Keyword.put(current, :limits, new_limits))
+    current_limitation = Keyword.get(current, :limitation, %{})
+
+    limitation =
+      toml
+      |> Map.get(:limitation, %{})
+      |> map_or_empty()
+      |> Map.take(@limitation_keys)
+
+    new_limitation =
+      current_limitation
+      |> map_or_empty()
+      |> Map.merge(limitation)
+
+    new_relay_info =
+      current
+      |> Keyword.put(:limitation, new_limitation)
+
+    Application.put_env(:nostr_relay, :relay_info, new_relay_info)
+    maybe_merge_max_frame_size(new_limitation)
   end
 
-  defp merge_limits(_toml), do: :ok
+  defp maybe_merge_max_frame_size(%{} = limitation) do
+    case Map.get(limitation, :max_message_length) do
+      max_message_length when is_integer(max_message_length) and max_message_length > 0 ->
+        server = Application.get_env(:nostr_relay, :server, [])
+        websocket_options = Keyword.get(server, :websocket_options, [])
+
+        new_websocket_options =
+          websocket_options
+          |> Keyword.put(:max_frame_size, max_message_length)
+
+        Application.put_env(
+          :nostr_relay,
+          :server,
+          Keyword.put(server, :websocket_options, new_websocket_options)
+        )
+
+      _invalid ->
+        :ok
+    end
+  end
+
+  defp merge_relay_policy(%{relay_policy: relay_policy}) when is_map(relay_policy) do
+    current = Application.get_env(:nostr_relay, :relay_policy, [])
+
+    overrides =
+      relay_policy
+      |> Map.take(@relay_policy_keys)
+      |> Enum.to_list()
+
+    Application.put_env(:nostr_relay, :relay_policy, Keyword.merge(current, overrides))
+  end
+
+  defp merge_relay_policy(_toml), do: :ok
+
+  defp map_or_empty(%{} = value), do: value
+  defp map_or_empty(_value), do: %{}
 
   defp merge_auth(%{auth: auth}) when is_map(auth) do
     current = Application.get_env(:nostr_relay, :auth, [])

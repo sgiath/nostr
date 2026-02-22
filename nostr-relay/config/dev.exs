@@ -8,10 +8,7 @@ config :nostr_relay, :server,
 
 config :nostr_relay, config_path: "config/relay.toml"
 
-config :nostr_relay, :relay_info,
-  name: "Nostr Relay",
-  description: "A focused, test-first Nostr relay implementation.",
-  url: "ws://localhost:4000"
+config :nostr_relay, :relay_info, url: "ws://localhost:4000"
 
 config :nostr_relay, :debug_log,
   enabled: false,

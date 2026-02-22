@@ -19,12 +19,28 @@ port = 4000
 [database]
 # path = "~/.local/share/nostr-relay/relay.db"
 
-[limits]
+[limitation]
+max_message_length = 8000000
 max_subscriptions = 100
-max_filters = 100
 max_limit = 10_000
-min_prefix_length = 4
+max_subid_length = 100
+max_event_tags = 100
+max_content_length = 8192
 min_pow_difficulty = 0
+# auth_required is derived from [auth].required
+payment_required = false
+restricted_writes = false
+created_at_lower_limit = 31536000
+created_at_upper_limit = 900
+default_limit = 500
+
+# Internal relay policy (not part of NIP-11 metadata)
+[relay_policy]
+# Minimum prefix length for REQ/COUNT `ids` and `authors` filters.
+# - Prefixes shorter than this are rejected to avoid expensive broad scans.
+# - Full 64-char hex ids/pubkeys are always accepted.
+# Example: with min_prefix_length = 4, "abc" is rejected, "abcd" is allowed.
+min_prefix_length = 4
 
 # NIP-42 Authentication
 # The relay always sends an AUTH challenge on every new connection so clients

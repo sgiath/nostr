@@ -10,6 +10,7 @@ defmodule Nostr.Relay.Pipeline.Engine do
 
   Stage sequence can be overridden via the `:stages` option, which defaults to:
 
+  - `MessageSizeValidator`
   - `ProtocolValidator`
   - `AuthEnforcer`
   - `MessageValidator`
@@ -33,6 +34,7 @@ defmodule Nostr.Relay.Pipeline.Engine do
   require Logger
 
   @default_stages [
+    Nostr.Relay.Pipeline.Stages.MessageSizeValidator,
     Nostr.Relay.Pipeline.Stages.ProtocolValidator,
     Nostr.Relay.Pipeline.Stages.AuthEnforcer,
     Nostr.Relay.Pipeline.Stages.MessageValidator,
@@ -149,7 +151,12 @@ defmodule Nostr.Relay.Pipeline.Engine do
   defp notice_message(:prefix_too_short),
     do: Message.notice("restricted: filter prefix too short")
 
+  defp notice_message(:subid_too_long),
+    do: Message.notice("restricted: subscription id too long")
+
   defp notice_message(:invalid_message_format), do: Message.notice("invalid message format")
+
+  defp notice_message(:message_too_large), do: Message.notice("message too large")
 
   defp notice_message(:unsupported_json_escape),
     do: Message.notice("invalid message: unsupported JSON escape")

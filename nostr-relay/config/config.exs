@@ -10,16 +10,34 @@ config :nostr_relay, :server,
 config :nostr_relay, Nostr.Relay.Repo, default_transaction_mode: :immediate
 
 config :nostr_relay, :relay_info,
-  software: "nostr_relay",
+  name: "Nostr Relay",
+  description: "General-purpose Nostr relay",
+  banner: nil,
+  icon: nil,
+  pubkey: nil,
+  contact: nil,
+  terms_of_service: nil,
+  software: "https://github.com/sgiath/nostr",
   version: "0.1.0",
   supported_nips: [1, 2, 4, 9, 11, 13, 17, 28, 40, 42, 45, 50, 59, 70],
-  limits: %{
+  payments_url: nil,
+  fees: nil,
+  limitation: %{
+    max_message_length: 8_000_000,
     max_subscriptions: 100,
-    max_filters: 100,
     max_limit: 10_000,
-    min_prefix_length: 8,
-    min_pow_difficulty: 0
+    max_subid_length: 100,
+    max_event_tags: 100,
+    max_content_length: 8_192,
+    min_pow_difficulty: 0,
+    payment_required: false,
+    restricted_writes: false,
+    created_at_lower_limit: 31_536_000,
+    created_at_upper_limit: 900,
+    default_limit: 500
   }
+
+config :nostr_relay, :relay_policy, min_prefix_length: 8
 
 config :nostr_relay, :relay_identity,
   self_pub: nil,

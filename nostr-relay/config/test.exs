@@ -9,8 +9,4 @@ config :nostr_relay, :server,
   ip: {127, 0, 0, 1},
   port: 4002
 
-config :nostr_relay, :relay_info,
-  name: "Nostr Relay",
-  description: "A focused, test-first Nostr relay implementation."
-
 config :logger, level: :warning

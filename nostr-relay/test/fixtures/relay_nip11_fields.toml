@@ -1,0 +1,12 @@
+[relay]
+banner = "https://relay.example.com/banner.png"
+icon = "https://relay.example.com/icon.png"
+privacy_policy = "https://relay.example.com/privacy.txt"
+terms_of_service = "https://relay.example.com/tos.txt"
+payments_url = "https://relay.example.com/payments"
+
+[relay.fees]
+
+[[relay.fees.admission]]
+amount = 1000
+unit = "msats"

@@ -89,6 +89,52 @@ defmodule Nostr.Relay.Web.MessageRouterTest do
       assert [%Filter{}] = subscriptions["sub-empty"]
     end
 
+    test "enforces max_subscriptions per connection on REQ", %{state: state} do
+      original_relay_info = Application.get_env(:nostr_relay, :relay_info)
+
+      on_exit(fn ->
+        Application.put_env(:nostr_relay, :relay_info, original_relay_info)
+      end)
+
+      relay_info = Application.get_env(:nostr_relay, :relay_info, [])
+
+      limitation =
+        relay_info
+        |> Keyword.get(:limitation, %{})
+        |> Map.put(:max_subscriptions, 1)
+
+      Application.put_env(
+        :nostr_relay,
+        :relay_info,
+        Keyword.put(relay_info, :limitation, limitation)
+      )
+
+      first_request =
+        %Filter{}
+        |> Message.request("sub-1")
+        |> Message.serialize()
+
+      second_request =
+        %Filter{}
+        |> Message.request("sub-2")
+        |> Message.serialize()
+
+      eose_payload = Message.eose("sub-1") |> Message.serialize()
+
+      closed_payload =
+        Message.closed("sub-2", "restricted: max subscriptions reached") |> Message.serialize()
+
+      assert {:push, [{:text, ^eose_payload}], state_after_first_req} =
+               MessageRouter.route_frame(first_request, state)
+
+      assert {:push, [{:text, ^closed_payload}], state_after_second_req} =
+               MessageRouter.route_frame(second_request, state_after_first_req)
+
+      assert state_after_second_req.messages == 2
+      assert ConnectionState.subscription_active?(state_after_second_req, "sub-1")
+      refute ConnectionState.subscription_active?(state_after_second_req, "sub-2")
+    end
+
     test "returns EOSE for REQ after malformed raw EVENT payload", %{state: state} do
       event =
         valid_event(created_at: ~U[2099-01-01 00:00:00Z])

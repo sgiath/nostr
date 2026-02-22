@@ -42,14 +42,30 @@ defmodule Nostr.Relay.Web.RouterTest do
         |> Enum.at(0)
 
       assert content_type == "application/nostr+json; charset=utf-8"
+      assert get_resp_header(response, "access-control-allow-origin") == ["*"]
+      assert get_resp_header(response, "access-control-allow-headers") == ["*"]
+      assert get_resp_header(response, "access-control-allow-methods") == ["GET, OPTIONS"]
 
       info =
         response.resp_body
         |> JSON.decode!()
 
       assert info["name"] == "Nostr Relay"
-      assert info["software"] == "nostr_relay"
-      assert is_map(info["limits"])
+      assert info["software"] == "https://github.com/sgiath/nostr"
+      assert is_map(info["limitation"])
+      refute Map.has_key?(info, "limits")
+    end
+
+    test "returns CORS preflight headers for relay metadata" do
+      conn = conn(:options, "/")
+
+      response = Router.call(conn, Router.init([]))
+
+      assert response.state == :sent
+      assert response.status == 204
+      assert get_resp_header(response, "access-control-allow-origin") == ["*"]
+      assert get_resp_header(response, "access-control-allow-headers") == ["*"]
+      assert get_resp_header(response, "access-control-allow-methods") == ["GET, OPTIONS"]
     end
 
     test "upgrades websocket requests" do

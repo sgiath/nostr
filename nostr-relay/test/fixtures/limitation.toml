@@ -1,0 +1,7 @@
+[limitation]
+max_subscriptions = 50
+min_pow_difficulty = 10
+auth_required = true
+payment_required = true
+created_at_lower_limit = 30
+min_prefix_length = 8

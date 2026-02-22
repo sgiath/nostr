@@ -1,0 +1,4 @@
+[limitation]
+max_message_length = 16384
+max_subscriptions = 50
+min_pow_difficulty = 20

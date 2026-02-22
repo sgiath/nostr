@@ -31,7 +31,7 @@ defmodule Nostr.Relay.Web.Router do
     else
       if metadata_request?(conn) do
         conn
-        |> Conn.put_resp_content_type("application/nostr+json")
+        |> put_nip11_headers()
         |> send_resp(200, RelayInfo.json())
       else
         conn
@@ -39,6 +39,12 @@ defmodule Nostr.Relay.Web.Router do
         |> send_resp(200, Page.html())
       end
     end
+  end
+
+  options "/" do
+    conn
+    |> put_nip11_headers()
+    |> send_resp(204, "")
   end
 
   match _ do
@@ -96,5 +102,13 @@ defmodule Nostr.Relay.Web.Router do
       end
 
     conn
+  end
+
+  defp put_nip11_headers(conn) do
+    conn
+    |> Conn.put_resp_content_type("application/nostr+json")
+    |> Conn.put_resp_header("access-control-allow-origin", "*")
+    |> Conn.put_resp_header("access-control-allow-headers", "*")
+    |> Conn.put_resp_header("access-control-allow-methods", "GET, OPTIONS")
   end
 end

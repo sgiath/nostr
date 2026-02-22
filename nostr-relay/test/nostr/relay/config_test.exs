@@ -14,6 +14,7 @@ defmodule Nostr.Relay.ConfigTest do
     original_auth = Application.get_env(:nostr_relay, :auth)
     original_nip29 = Application.get_env(:nostr_relay, :nip29)
     original_relay_identity = Application.get_env(:nostr_relay, :relay_identity)
+    original_relay_policy = Application.get_env(:nostr_relay, :relay_policy)
 
     on_exit(fn ->
       Application.put_env(:nostr_relay, :relay_info, original_relay_info)
@@ -22,6 +23,7 @@ defmodule Nostr.Relay.ConfigTest do
       Application.put_env(:nostr_relay, :auth, original_auth)
       Application.put_env(:nostr_relay, :nip29, original_nip29)
       Application.put_env(:nostr_relay, :relay_identity, original_relay_identity)
+      Application.put_env(:nostr_relay, :relay_policy, original_relay_policy)
 
       if original_config_path do
         Application.put_env(:nostr_relay, :config_path, original_config_path)
@@ -91,7 +93,7 @@ defmodule Nostr.Relay.ConfigTest do
       info = Application.get_env(:nostr_relay, :relay_info)
       assert Keyword.get(info, :name) == "Override Only Name"
       # software is a compile-time default, not in TOML
-      assert Keyword.get(info, :software) == "nostr_relay"
+      assert Keyword.get(info, :software) == "https://github.com/sgiath/nostr"
     end
 
     test "merges server ip and port" do
@@ -111,29 +113,43 @@ defmodule Nostr.Relay.ConfigTest do
       assert Keyword.get(server, :port) == 8080
     end
 
-    test "merges limits into relay_info" do
+    test "merges limitation into relay_info" do
       toml = """
-      [limits]
+      [limitation]
+      max_message_length = 16384
       max_subscriptions = 50
-      min_prefix_length = 8
       min_pow_difficulty = 20
       """
 
-      path = write_fixture("limits.toml", toml)
+      path = write_fixture("limitation_basic.toml", toml)
       Application.put_env(:nostr_relay, :config_path, path)
 
       assert :ok = Config.load!()
 
       info = Application.get_env(:nostr_relay, :relay_info)
-      limits = Keyword.get(info, :limits)
-      assert limits[:max_subscriptions] == 50
-      assert limits[:min_prefix_length] == 8
-      assert limits[:min_pow_difficulty] == 20
+      limitation = Keyword.get(info, :limitation)
+
+      assert limitation[:max_message_length] == 16_384
+      assert limitation[:max_subscriptions] == 50
+      assert limitation[:min_pow_difficulty] == 20
       # Existing defaults preserved
-      assert limits[:max_limit] == 10_000
+      assert limitation[:max_limit] == 10_000
+      assert limitation[:max_subid_length] == 100
+      assert limitation[:max_event_tags] == 100
+      assert limitation[:max_content_length] == 8_192
+      assert limitation[:payment_required] == false
+      assert limitation[:restricted_writes] == false
+      assert limitation[:created_at_lower_limit] == 31_536_000
+      assert limitation[:created_at_upper_limit] == 900
+      assert limitation[:default_limit] == 500
+      assert Keyword.get(info, :limits) == nil
+
+      server = Application.get_env(:nostr_relay, :server)
+      websocket_options = Keyword.get(server, :websocket_options, [])
+      assert Keyword.get(websocket_options, :max_frame_size) == 16_384
     end
 
-    test "merges relay supported_nips but ignores software and version from TOML" do
+    test "merges relay supported_nips and software/version from TOML" do
       toml = """
       [relay]
       name = "Override Name"
@@ -151,9 +167,81 @@ defmodule Nostr.Relay.ConfigTest do
       # Name is overridden
       assert Keyword.get(info, :name) == "Override Name"
       assert Keyword.get(info, :supported_nips) == [11, 42, 70]
-      # These are compile-time only and must not change
-      assert Keyword.get(info, :software) == "nostr_relay"
-      assert Keyword.get(info, :version) == "0.1.0"
+      assert Keyword.get(info, :software) == "evil_relay"
+      assert Keyword.get(info, :version) == "9.9.9"
+    end
+
+    test "merges NIP-11 optional metadata fields from TOML" do
+      toml = """
+      [relay]
+      banner = "https://relay.example.com/banner.png"
+      icon = "https://relay.example.com/icon.png"
+      privacy_policy = "https://relay.example.com/privacy.txt"
+      terms_of_service = "https://relay.example.com/tos.txt"
+      payments_url = "https://relay.example.com/payments"
+
+      [relay.fees]
+
+      [[relay.fees.admission]]
+      amount = 1000
+      unit = "msats"
+      """
+
+      path = write_fixture("relay_nip11_fields.toml", toml)
+      Application.put_env(:nostr_relay, :config_path, path)
+
+      assert :ok = Config.load!()
+
+      info = Application.get_env(:nostr_relay, :relay_info)
+      assert Keyword.get(info, :banner) == "https://relay.example.com/banner.png"
+      assert Keyword.get(info, :icon) == "https://relay.example.com/icon.png"
+      assert Keyword.get(info, :terms_of_service) == "https://relay.example.com/tos.txt"
+      assert Keyword.get(info, :payments_url) == "https://relay.example.com/payments"
+      assert Keyword.get(info, :fees) == %{admission: [%{amount: 1000, unit: "msats"}]}
+      assert Keyword.get(info, :privacy_policy) == nil
+    end
+
+    test "merges NIP-11 limitation from TOML" do
+      toml = """
+      [limitation]
+      max_subscriptions = 50
+      min_pow_difficulty = 10
+      auth_required = true
+      payment_required = true
+      created_at_lower_limit = 30
+      min_prefix_length = 8
+      """
+
+      path = write_fixture("limitation.toml", toml)
+      Application.put_env(:nostr_relay, :config_path, path)
+
+      assert :ok = Config.load!()
+
+      info = Application.get_env(:nostr_relay, :relay_info)
+      limitation = Keyword.get(info, :limitation)
+
+      assert limitation[:max_subscriptions] == 50
+      assert limitation[:min_pow_difficulty] == 10
+      assert limitation[:auth_required] == nil
+      assert limitation[:payment_required] == true
+      assert limitation[:created_at_lower_limit] == 30
+      assert limitation[:min_prefix_length] == nil
+      assert Keyword.get(info, :limits) == nil
+    end
+
+    test "merges relay_policy from TOML" do
+      toml = """
+      [relay_policy]
+      min_prefix_length = 4
+      """
+
+      path = write_fixture("relay_policy.toml", toml)
+      Application.put_env(:nostr_relay, :config_path, path)
+
+      assert :ok = Config.load!()
+
+      relay_policy = Application.get_env(:nostr_relay, :relay_policy)
+      assert Keyword.get(relay_policy, :min_prefix_length) == 4
     end
 
     test "merges database path with expansion" do

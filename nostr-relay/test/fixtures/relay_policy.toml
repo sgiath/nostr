@@ -1,0 +1,2 @@
+[relay_policy]
+min_prefix_length = 4
