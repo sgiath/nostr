@@ -6,7 +6,7 @@ config :nostr_relay, :server,
   ip: {127, 0, 0, 1},
   port: 4000
 
-config :nostr_relay, config_path: "config/relay.toml"
+config :nostr_relay, config_path: "../relay.toml"
 
 config :nostr_relay, :relay_info, url: "ws://localhost:4000"
 

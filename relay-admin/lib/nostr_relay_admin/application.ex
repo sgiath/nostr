@@ -1,0 +1,30 @@
+defmodule Nostr.Application do
+  @moduledoc false
+  use Application
+
+  @impl true
+  def start(_type, _args) do
+    children = [
+      NostrWeb.Telemetry,
+      Nostr.Repo,
+      {Ecto.Migrator,
+       repos: Application.fetch_env!(:nostr_relay_admin, :ecto_repos), skip: skip_migrations?()},
+      {DNSCluster, query: Application.get_env(:nostr_relay_admin, :dns_cluster_query) || :ignore},
+      {Phoenix.PubSub, name: Nostr.PubSub},
+      NostrWeb.Endpoint
+    ]
+
+    Supervisor.start_link(children, strategy: :one_for_one, name: Nostr.Supervisor)
+  end
+
+  @impl true
+  def config_change(changed, _new, removed) do
+    NostrWeb.Endpoint.config_change(changed, removed)
+    :ok
+  end
+
+  defp skip_migrations?() do
+    # By default, sqlite migrations are run when using a release
+    System.get_env("RELEASE_NAME") == nil
+  end
+end

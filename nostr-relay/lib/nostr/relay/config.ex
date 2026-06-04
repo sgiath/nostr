@@ -91,13 +91,14 @@ defmodule Nostr.Relay.Config do
   @spec apply_toml!(String.t()) :: :ok
   defp apply_toml!(path) do
     Logger.info("[config] Loading TOML config from #{path}")
+    config_dir = Path.dirname(path)
 
     case Toml.decode_file(path, keys: :atoms) do
       {:ok, toml} ->
         merge_relay_info(toml)
         merge_relay_identity(toml)
         merge_server(toml)
-        merge_database(toml)
+        merge_database(toml, config_dir)
         merge_limitation(toml)
         merge_relay_policy(toml)
         merge_auth(toml)
@@ -182,11 +183,11 @@ defmodule Nostr.Relay.Config do
 
   defp merge_server(_toml), do: :ok
 
-  defp merge_database(%{database: %{path: db_path}}) when is_binary(db_path) do
-    set_database_path(db_path)
+  defp merge_database(%{database: %{path: db_path}}, config_dir) when is_binary(db_path) do
+    set_database_path(db_path, config_dir)
   end
 
-  defp merge_database(_toml), do: :ok
+  defp merge_database(_toml, _config_dir), do: :ok
 
   @doc """
   Expands `~` in the configured Repo database path and ensures its parent
@@ -203,8 +204,8 @@ defmodule Nostr.Relay.Config do
     end
   end
 
-  defp set_database_path(path) do
-    expanded = Path.expand(path)
+  defp set_database_path(path, base_dir \\ nil) do
+    expanded = expand_path(path, base_dir)
 
     expanded
     |> Path.dirname()
@@ -213,6 +214,9 @@ defmodule Nostr.Relay.Config do
     current = Application.get_env(:nostr_relay, Nostr.Relay.Repo, [])
     Application.put_env(:nostr_relay, Nostr.Relay.Repo, Keyword.put(current, :database, expanded))
   end
+
+  defp expand_path(path, nil), do: Path.expand(path)
+  defp expand_path(path, base_dir), do: Path.expand(path, base_dir)
 
   defp merge_limitation(toml) when is_map(toml) do
     current = Application.get_env(:nostr_relay, :relay_info, [])

@@ -259,6 +259,27 @@ defmodule Nostr.Relay.ConfigTest do
       assert Keyword.get(repo, :database) == Path.expand("~/data/relay.db")
     end
 
+    test "resolves relative database path from TOML directory" do
+      toml = """
+      [database]
+      path = "./relay_shared.db"
+      """
+
+      fixture_dir =
+        Path.join(System.tmp_dir!(), "nostr_relay_config_#{System.unique_integer([:positive])}")
+
+      File.mkdir_p!(fixture_dir)
+      path = Path.join(fixture_dir, "database_relative.toml")
+      File.write!(path, toml)
+
+      Application.put_env(:nostr_relay, :config_path, path)
+
+      assert :ok = Config.load!()
+
+      repo = Application.get_env(:nostr_relay, Nostr.Relay.Repo)
+      assert Keyword.get(repo, :database) == Path.expand("./relay_shared.db", Path.dirname(path))
+    end
+
     test "preserves repo defaults when database section absent" do
       toml = """
       [relay]

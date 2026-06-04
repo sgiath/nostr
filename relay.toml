@@ -1,0 +1,15 @@
+[database]
+path = "./.data/relay_dev.db"
+
+[server]
+ip = "127.0.0.1"
+port = 4000
+
+[relay]
+url = "ws://localhost:4000"
+
+[admin]
+ip = "127.0.0.1"
+port = 4001
+host = "localhost"
+scheme = "http"
