@@ -117,8 +117,6 @@ defmodule Nostr.Relay.Pipeline.Stages.EventValidator do
     end
   end
 
-  defp signature_valid?(_event), do: false
-
   defp decode_hex(value) when is_binary(value), do: Base.decode16(value, case: :lower)
   defp decode_hex(_), do: :error
 

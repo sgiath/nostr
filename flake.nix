@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-unstable";
+    nixpkgs.url = "nixpkgs/master";
     parts.url = "github:hercules-ci/flake-parts";
   };
 
@@ -12,8 +12,8 @@
       perSystem =
         { pkgs, ... }:
         let
-          beamPackages = pkgs.beam_minimal.packages.erlang_28;
-          elixir = beamPackages.elixir_1_19;
+          beamPackages = pkgs.beam_minimal.packages.erlang_29;
+          elixir = beamPackages.elixir_1_20;
         in
         {
           devShells.default = pkgs.mkShell {

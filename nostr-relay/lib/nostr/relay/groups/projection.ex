@@ -255,8 +255,6 @@ defmodule Nostr.Relay.Groups.Projection do
     end)
   end
 
-  defp roles_for_put_user(_event), do: []
-
   defp apply_metadata_snapshot(%Group{} = group, %Event{kind: 39_000, tags: tags} = event) do
     attrs = %{
       name: value_for(tags, :name),

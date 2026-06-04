@@ -365,7 +365,7 @@ defmodule Nostr.NIP45 do
   defp decode_pubkey(_pubkey_hex), do: {:error, :invalid_pubkey}
 
   defp put_register(registers, index, value) do
-    <<prefix::binary-size(index), _current::8, suffix::binary>> = registers
+    <<prefix::binary-size(^index), _current::8, suffix::binary>> = registers
     <<prefix::binary, value::8, suffix::binary>>
   end
 

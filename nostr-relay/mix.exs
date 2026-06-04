@@ -28,10 +28,10 @@ defmodule NostrRelay.MixProject do
   defp deps do
     [
       {:nostr_lib, path: "../nostr-lib"},
-      {:bandit, "~> 1.10"},
+      {:bandit, "~> 1.11"},
       {:websock, "~> 0.5"},
-      {:ecto_sql, "~> 3.13"},
-      {:ecto_sqlite3, "~> 0.22"},
+      {:ecto_sql, "~> 3.14"},
+      {:ecto_sqlite3, "~> 0.24"},
       {:phoenix_pubsub, "~> 2.2"},
       {:toml, "~> 0.7"},
       {:mint_web_socket, "~> 1.0", only: :test},

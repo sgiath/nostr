@@ -183,7 +183,7 @@ defmodule Nostr.Bolt11 do
   end
 
   # Parse data: timestamp (35 bits) + tagged fields + signature (520 bits) + recovery (5 bits)
-  defp parse_data(data) when is_list(data) do
+  defp parse_data(data) when is_bitstring(data) do
     # Convert 5-bit values to binary
     bits =
       Enum.map_join(data, fn val ->

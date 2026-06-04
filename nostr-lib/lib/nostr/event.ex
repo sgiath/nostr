@@ -156,7 +156,7 @@ end
 
 defimpl JSON.Encoder, for: Nostr.Event do
   def encode(%Nostr.Event{} = event, encoder) do
-    :elixir_json.encode_map(
+    JSON.encode!(
       %{
         id: event.id,
         pubkey: event.pubkey,

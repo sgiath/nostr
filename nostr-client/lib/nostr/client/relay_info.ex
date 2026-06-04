@@ -144,8 +144,6 @@ defmodule Nostr.Client.RelayInfo do
     {:ok, document}
   end
 
-  defp parse_document(_raw), do: {:error, :invalid_document}
-
   @spec relay_info_url(binary()) :: {:ok, URI.t()} | {:error, :invalid_relay_url}
   defp relay_info_url(relay_url) do
     with {:ok, normalized} <- SessionKey.normalize_relay_url(relay_url),

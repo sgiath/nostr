@@ -564,8 +564,6 @@ defmodule Nostr.Relay.Store.QueryBuilder do
     |> Kernel.||("")
   end
 
-  defp event_d_tag(_tags), do: ""
-
   defp kind_filter_allows?(nil, _kind), do: true
   defp kind_filter_allows?(kind_set, kind), do: kind in kind_set
 

@@ -163,8 +163,6 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
     Enum.any?(tags, &protected_tag?/1)
   end
 
-  defp protected_event?(_tags), do: false
-
   defp protected_tag?(%Tag{type: :-}), do: true
   defp protected_tag?(%Tag{type: "-"}), do: true
   defp protected_tag?(_tag), do: false
@@ -173,8 +171,6 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
     unauthorized_event_id_target?(tags, signer_pubkey) or
       unauthorized_address_target?(tags, signer_pubkey)
   end
-
-  defp unauthorized_deletion_target?(_tags, _signer_pubkey), do: false
 
   defp unauthorized_event_id_target?(tags, signer_pubkey) when is_list(tags) do
     tags
@@ -188,8 +184,6 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
     |> Enum.uniq()
     |> target_event_pubkeys_not_owned_by(signer_pubkey)
   end
-
-  defp unauthorized_event_id_target?(_tags, _signer_pubkey), do: false
 
   defp target_event_pubkeys_not_owned_by(event_ids, _signer_pubkey) when event_ids == [] do
     false
@@ -218,8 +212,6 @@ defmodule Nostr.Relay.Pipeline.Stages.StorePolicy do
         false
     end)
   end
-
-  defp unauthorized_address_target?(_tags, _signer_pubkey), do: false
 
   defp parse_address_tag(value) when is_binary(value) do
     case String.split(value, ":", parts: 3) do

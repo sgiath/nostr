@@ -126,7 +126,10 @@ defmodule Nostr.Client.TestSupport do
     port = uri.port || default_port(uri.scheme)
 
     if is_binary(host) && is_integer(port) do
-      case :gen_tcp.connect(String.to_charlist(host), port, [:binary, active: false], 2_000) do
+      host
+      |> String.to_charlist()
+      |> :gen_tcp.connect(port, [:binary, active: false], 2_000)
+      |> case do
         {:ok, socket} ->
           :gen_tcp.close(socket)
           :ok

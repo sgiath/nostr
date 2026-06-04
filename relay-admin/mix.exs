@@ -35,7 +35,7 @@ defmodule NostrAdmin.MixProject do
     [
       {:phoenix, "~> 1.8"},
       {:phoenix_ecto, "~> 4.7"},
-      {:ecto_sql, "~> 3.13"},
+      {:ecto_sql, "~> 3.14"},
       {:ecto_sqlite3, ">= 0.0.0"},
       {:phoenix_html, "~> 4.3"},
       {:phoenix_live_reload, "~> 1.6", only: :dev},
@@ -50,12 +50,12 @@ defmodule NostrAdmin.MixProject do
        app: false,
        compile: false,
        depth: 1},
-      {:swoosh, "~> 1.21"},
+      {:swoosh, "~> 1.26"},
       {:req, "~> 0.5"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.10"},
+      {:bandit, "~> 1.11"},
       {:toml, "~> 0.7"}
     ]
   end
