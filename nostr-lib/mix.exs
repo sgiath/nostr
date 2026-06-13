@@ -43,7 +43,7 @@ defmodule NostrLib.MixProject do
       {:lib_secp256k1, "~> 0.7"},
       {:bechamel, "~> 1.0"},
       {:scrypt, "~> 2.1"},
-      {:req, "~> 0.5", optional: true},
+      {:req, "~> 0.6", optional: true},
       {:plug, "~> 1.0", only: :test},
 
       # Development

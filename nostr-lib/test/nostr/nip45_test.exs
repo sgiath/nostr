@@ -141,7 +141,7 @@ defmodule Nostr.NIP45Test do
 
   defp register_bytes(values_by_index) do
     Enum.reduce(values_by_index, :binary.copy(<<0>>, 256), fn {index, value}, registers ->
-      <<prefix::binary-size(index), _current::8, suffix::binary>> = registers
+      <<prefix::binary-size(^index), _current::8, suffix::binary>> = registers
       <<prefix::binary, value::8, suffix::binary>>
     end)
   end

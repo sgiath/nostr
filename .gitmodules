@@ -5,6 +5,7 @@
 [submodule "nips"]
 	path = nips
 	url = github.com:nostr-protocol/nips
+
 [submodule "relay-tester"]
 	path = relay-tester
 	url = github.com:mikedilger/relay-tester

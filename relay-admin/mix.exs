@@ -39,10 +39,10 @@ defmodule NostrAdmin.MixProject do
       {:ecto_sqlite3, ">= 0.0.0"},
       {:phoenix_html, "~> 4.3"},
       {:phoenix_live_reload, "~> 1.6", only: :dev},
-      {:phoenix_live_view, "~> 1.1"},
+      {:phoenix_live_view, "~> 1.2"},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
-      {:tailwind, "~> 0.4", runtime: Mix.env() == :dev},
+      {:tailwind, "~> 0.5", runtime: Mix.env() == :dev},
       {:heroicons,
        github: "tailwindlabs/heroicons",
        tag: "v2.2.0",
@@ -51,11 +51,11 @@ defmodule NostrAdmin.MixProject do
        compile: false,
        depth: 1},
       {:swoosh, "~> 1.26"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6"},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.11"},
+      {:bandit, "~> 1.12"},
       {:toml, "~> 0.7"}
     ]
   end

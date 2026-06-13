@@ -28,7 +28,7 @@ defmodule NostrRelay.MixProject do
   defp deps do
     [
       {:nostr_lib, path: "../nostr-lib"},
-      {:bandit, "~> 1.11"},
+      {:bandit, "~> 1.12"},
       {:websock, "~> 0.5"},
       {:ecto_sql, "~> 3.14"},
       {:ecto_sqlite3, "~> 0.24"},

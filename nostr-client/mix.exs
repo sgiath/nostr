@@ -26,7 +26,7 @@ defmodule NostrClient.MixProject do
     [
       {:nostr_lib, path: "../nostr-lib"},
       {:mint_web_socket, "~> 1.0"},
-      {:req, "~> 0.5"},
+      {:req, "~> 0.6"},
 
       # testing
       {:plug, "~> 1.0", only: :test},

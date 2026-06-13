@@ -10,7 +10,7 @@ if System.get_env("PHX_SERVER") do
 end
 
 if config_env() == :prod do
-  repo_config = Application.get_env(:nostr_relay_admin, Nostr.Repo, [])
+  # repo_config = Application.get_env(:nostr_relay_admin, Nostr.Repo, [])
   endpoint_config = Application.get_env(:nostr_relay_admin, NostrWeb.Endpoint, [])
   endpoint_http = Keyword.get(endpoint_config, :http, [])
   endpoint_url = Keyword.get(endpoint_config, :url, [])
