@@ -1,7 +1,7 @@
 defmodule NostrLib.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.2.1"
 
   def project do
     [
@@ -41,7 +41,7 @@ defmodule NostrLib.MixProject do
   defp deps do
     [
       {:lib_secp256k1, "~> 0.7"},
-      {:bechamel, "~> 1.0"},
+      {:bechamel, "~> 1.1"},
       {:scrypt, "~> 2.1"},
       {:req, "~> 0.6", optional: true},
       {:plug, "~> 1.0", only: :test},
@@ -64,7 +64,7 @@ defmodule NostrLib.MixProject do
       files: ~w(lib .formatter.exs mix.exs README* LICENSE* CHANGELOG*),
       licenses: ["WTFPL"],
       links: %{
-        "GitHub" => "https://github.com/Sgiath/nostr-lib",
+        "GitHub" => "https://github.com/Sgiath/nostr",
         "Nostr specs" => "https://github.com/nostr-protocol/nips"
       }
     ]
@@ -77,7 +77,7 @@ defmodule NostrLib.MixProject do
       api_reference: false,
       formatters: ["html"],
       source_ref: "v#{@version}",
-      source_url: "https://github.com/Sgiath/nostr-lib",
+      source_url: "https://github.com/Sgiath/nostr",
       extra_section: "Guides",
       extras: extras(),
       groups_for_extras: groups_for_extras(),
@@ -160,6 +160,23 @@ defmodule NostrLib.MixProject do
         Nostr.Event.ZapRequest,
         Nostr.Event.ZapReceipt
       ],
+      "NIP Helpers": [
+        Nostr.NIP05,
+        Nostr.NIP13,
+        Nostr.NIP17,
+        Nostr.NIP19,
+        Nostr.NIP21,
+        Nostr.NIP29,
+        Nostr.NIP30,
+        Nostr.NIP36,
+        Nostr.NIP39,
+        Nostr.NIP44,
+        Nostr.NIP45,
+        Nostr.NIP49,
+        Nostr.NIP51,
+        Nostr.NIP57,
+        Nostr.NIP98
+      ],
       "Other Events": [
         # NIP-02
         Nostr.Event.Contacts,
@@ -192,7 +209,9 @@ defmodule NostrLib.MixProject do
         # NIP-65
         Nostr.Event.RelayList,
         # NIP-94
-        Nostr.Event.FileMetadata
+        Nostr.Event.FileMetadata,
+        # NIP-98
+        Nostr.Event.HttpAuth
       ],
       "Deprecated Events": [
         # NIP-01 (deprecated)

@@ -5,7 +5,7 @@ defmodule NostrRelay.MixProject do
     [
       app: :nostr_relay,
       version: "0.1.0",
-      elixir: "~> 1.19",
+      elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       build_embedded: Mix.env() == :prod,
       start_permanent: Mix.env() == :prod,

@@ -16,7 +16,10 @@ applications.
 - NIP-19 bech32 encoding (npub, nsec, note, nprofile, nevent, naddr)
 - NIP-59 gift wrap protocol for private messaging
 - WebSocket message protocol handling
+- NIP-13 proof-of-work difficulty validation and mining helpers
+- NIP-29 relay-based groups helpers
 - NIP-77 negentropy wire message handling (`NEG-OPEN`, `NEG-MSG`, `NEG-CLOSE`, `NEG-ERR`)
+- NIP-98 HTTP auth event creation and validation
 - Subscription filter building
 
 ## Installation
@@ -26,7 +29,7 @@ Add `nostr_lib` to your dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:nostr_lib, "~> 0.2.0"}
+    {:nostr_lib, "~> 0.2.1"}
   ]
 end
 ```
@@ -91,6 +94,7 @@ filter = %Nostr.Filter{
 | [NIP-04](https://github.com/nostr-protocol/nips/blob/master/04.md) | Deprecated | Encrypted DMs (use NIP-17)  | 4                        |
 | [NIP-05](https://github.com/nostr-protocol/nips/blob/master/05.md) | Full       | DNS-based identifiers       | -                        |
 | [NIP-09](https://github.com/nostr-protocol/nips/blob/master/09.md) | Full       | Event deletion              | 5                        |
+| [NIP-13](https://github.com/nostr-protocol/nips/blob/master/13.md) | Full       | Proof of Work               | -                        |
 | [NIP-16](https://github.com/nostr-protocol/nips/blob/master/16.md) | Full       | Event kind ranges           | 1000-39999               |
 | [NIP-17](https://github.com/nostr-protocol/nips/blob/master/17.md) | Full       | Private direct messages     | 14, 15, 10050            |
 | [NIP-18](https://github.com/nostr-protocol/nips/blob/master/18.md) | Deprecated | Reposts                     | 6                        |
@@ -100,6 +104,7 @@ filter = %Nostr.Filter{
 | [NIP-23](https://github.com/nostr-protocol/nips/blob/master/23.md) | Full       | Long-form content           | 30023, 30024             |
 | [NIP-25](https://github.com/nostr-protocol/nips/blob/master/25.md) | Full       | Reactions                   | 7, 17                    |
 | [NIP-28](https://github.com/nostr-protocol/nips/blob/master/28.md) | Full       | Public chat channels        | 40-44                    |
+| [NIP-29](https://github.com/nostr-protocol/nips/blob/master/29.md) | Partial    | Relay-based groups helpers  | 9000-9022, 39000-39003   |
 | [NIP-30](https://github.com/nostr-protocol/nips/blob/master/30.md) | Full       | Custom emoji                | -                        |
 | [NIP-32](https://github.com/nostr-protocol/nips/blob/master/32.md) | Full       | Labeling                    | 1985                     |
 | [NIP-36](https://github.com/nostr-protocol/nips/blob/master/36.md) | Full       | Sensitive content           | -                        |
@@ -119,6 +124,7 @@ filter = %Nostr.Filter{
 | [NIP-65](https://github.com/nostr-protocol/nips/blob/master/65.md) | Full       | Relay list metadata         | 10002                    |
 | [NIP-77](https://github.com/nostr-protocol/nips/blob/master/77.md) | Partial    | Negentropy message contract | -                        |
 | [NIP-94](https://github.com/nostr-protocol/nips/blob/master/94.md) | Full       | File metadata               | 1063                     |
+| [NIP-98](https://github.com/nostr-protocol/nips/blob/master/98.md) | Partial    | HTTP Auth event semantics   | 27235                    |
 
 ## Core Modules
 
@@ -163,6 +169,7 @@ Each event kind has a dedicated module in `Nostr.Event.*`:
 | 10002 | `RelayList`        | Relay list metadata           |
 | 10050 | `DMRelayList`      | DM relay preferences          |
 | 22242 | `ClientAuth`       | Client authentication         |
+| 27235 | `HttpAuth`         | HTTP authentication           |
 | 30023 | `Article`          | Long-form content             |
 | 30315 | `UserStatus`       | User status updates           |
 

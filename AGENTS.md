@@ -139,11 +139,6 @@ Repo-root utilities: `prettier **/*.md --check|--write` and
 - Avoid file-wide Credo disables (`# credo:disable-for-this-file`).
 - Keep changes focused; do not refactor unrelated areas opportunistically.
 
-## Cursor / Copilot rule files
-
-Checked `.cursorrules`, `.cursor/rules/`, and `.github/copilot-instructions.md`.
-No Cursor or Copilot instruction files were found in this repository.
-
 <!-- BACKLOG.MD MCP GUIDELINES START -->
 
 <CRITICAL_INSTRUCTION>

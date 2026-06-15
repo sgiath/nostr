@@ -1,7 +1,5 @@
 # Instructions for LLMs
 
-**Generated:** 2026-02-01 | **Commit:** 91e4b11 | **Branch:** master
-
 ## Overview
 
 Low-level Elixir library implementing the Nostr protocol. Provides structs, parsing, serialization, and cryptographic functions. Pure library (no OTP application).

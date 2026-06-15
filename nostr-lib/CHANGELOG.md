@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.2.1 (2026-06-15)
+
+- fix type violations for Elixir 1.20
+- fix JSON encoder implementation for Erlang 29
+- add NIP-77
+- add NIP-29
+- add NIP-13
+- add NIP-98
+
 ## v0.2.0 (2026-01-07)
 
 - minimal version of Elixir is 1.18 (due to JSON module usage)
