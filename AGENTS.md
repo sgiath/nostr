@@ -1,8 +1,5 @@
 # Nostr Monorepo Agent Guide
 
-For coding agents operating in `/home/sgiath/develop/sgiath/nostr`.
-Focus: reliable commands, test targeting, and style rules.
-
 ## Scope and Layout
 
 ```text
@@ -10,13 +7,11 @@ nostr/
 ├── nostr-lib/      # Low-level Nostr protocol library (pure lib)
 ├── nostr-client/   # OTP WebSocket client for relays
 ├── nostr-relay/    # OTP relay server implementation
-├── nak/            # Read-only git submodule (reference)
-├── nips/           # Read-only git submodule (authoritative specs)
 ├── relay-tester/   # Tooling for relay validation scenarios
 └── flake.nix       # Dev shell (Elixir, Erlang, Node, Python)
 ```
 
-`nips/` is the protocol authority and is read-only. `nak/` is also read-only.
+`nips` is the protocol authority
 
 Preferred setup: `direnv allow` + Nix flake shell. Toolchain target: Erlang 28, Elixir 1.19.
 JSON rule: use built-in `JSON` only (never Jason/Poison).
@@ -123,7 +118,7 @@ Repo-root utilities: `prettier **/*.md --check|--write` and
 
 ## Nostr-specific rules
 
-- Follow NIP specs from `nips/` as source of truth.
+- Follow NIP specs from `nips` as source of truth.
 - For new event kinds in `nostr-lib`: add module in `lib/nostr/event/`,
   implement `parse/1` + `create/...`, register in `lib/nostr/event/parser.ex`,
   and add mirrored tests in `test/nostr/event/`.
@@ -134,37 +129,20 @@ Repo-root utilities: `prettier **/*.md --check|--write` and
 
 ## Safety and repo hygiene
 
-- Never edit read-only submodules: `nak/`, `nips/`.
 - Do not add OTP app behavior to `nostr-lib` (it is a pure library).
 - Avoid file-wide Credo disables (`# credo:disable-for-this-file`).
 - Keep changes focused; do not refactor unrelated areas opportunistically.
 
-<!-- BACKLOG.MD MCP GUIDELINES START -->
+## Agent skills
 
-<CRITICAL_INSTRUCTION>
+### Issue tracker
 
-## BACKLOG WORKFLOW INSTRUCTIONS
+Issues are tracked in Linear under the **Nostr** project (team SGI); external PRs are not a triage surface. See `docs/agents/issue-tracker.md`.
 
-This project uses Backlog.md MCP for all task and project management activities.
+### Triage labels
 
-**CRITICAL GUIDANCE**
+Default vocabulary: needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix. See `docs/agents/triage-labels.md`.
 
-- If your client supports MCP resources, read `backlog://workflow/overview` to understand when and how to use Backlog for this project.
-- If your client only supports tools or the above request fails, call `backlog.get_backlog_instructions()` to load the tool-oriented overview. Use the `instruction` selector when you need `task-creation`, `task-execution`, or `task-finalization`.
+### Domain docs
 
-- **First time working here?** Read the overview resource IMMEDIATELY to learn the workflow
-- **Already familiar?** You should have the overview cached ("## Backlog.md Overview (MCP)")
-- **When to read it**: BEFORE creating tasks, or when you're unsure whether to track work
-
-These guides cover:
-
-- Decision framework for when to create tasks
-- Search-first workflow to avoid duplicates
-- Links to detailed guides for task creation, execution, and finalization
-- MCP tools reference
-
-You MUST read the overview resource to understand the complete workflow. The information is NOT summarized here.
-
-</CRITICAL_INSTRUCTION>
-
-<!-- BACKLOG.MD MCP GUIDELINES END -->
+Multi-context: `CONTEXT-MAP.md` at the root points to per-project `CONTEXT.md` files (nostr-lib, nostr-client, nostr-relay). See `docs/agents/domain.md`.

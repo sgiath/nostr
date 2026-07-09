@@ -1,4 +1,4 @@
-{ pkgs, lib, config, inputs, ... }:
+{ pkgs, ... }:
 
 {
   packages = with pkgs; [ git prettier ];
